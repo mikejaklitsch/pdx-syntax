@@ -357,21 +357,26 @@ def changes(ctx, version):
 
 @main.command()
 @click.option("--force", is_flag=True, help="Force update even if recently updated")
+@click.option("--comprehensive", is_flag=True, help="Do comprehensive scraping (slower but more complete)")
 @click.pass_context
-def update(ctx, force):
+def update(ctx, force, comprehensive):
     """Update the database from wiki sources.
 
     This fetches the latest data from the EU5 wiki and modding digests.
     Rate limiting is applied to prevent excessive requests.
-    """
-    from .scrapers.wiki import update_from_wiki
 
+    Use --comprehensive for thorough scraping that extracts all available
+    effects, triggers, scopes, and modifiers from the wiki.
+    """
     db_path = ctx.obj["db_path"]
 
-    with console.status("[bold green]Updating database from wiki sources..."):
+    if comprehensive:
+        from .scrapers.comprehensive import comprehensive_update
+
+        console.print("[bold]Starting comprehensive update (this may take a few minutes)...[/bold]")
         try:
-            stats = update_from_wiki(db_path, force=force)
-            console.print("[green]Update complete![/green]")
+            stats = comprehensive_update(db_path, verbose=True)
+            console.print("\n[green]Comprehensive update complete![/green]")
             console.print(f"  Effects: {stats.get('effects', 0)}")
             console.print(f"  Triggers: {stats.get('triggers', 0)}")
             console.print(f"  Scopes: {stats.get('scopes', 0)}")
@@ -379,6 +384,22 @@ def update(ctx, force):
             console.print(f"  On Actions: {stats.get('on_actions', 0)}")
         except Exception as e:
             console.print(f"[red]Update failed: {e}[/red]")
+            import traceback
+            traceback.print_exc()
+    else:
+        from .scrapers.wiki import update_from_wiki
+
+        with console.status("[bold green]Updating database from wiki sources..."):
+            try:
+                stats = update_from_wiki(db_path, force=force)
+                console.print("[green]Update complete![/green]")
+                console.print(f"  Effects: {stats.get('effects', 0)}")
+                console.print(f"  Triggers: {stats.get('triggers', 0)}")
+                console.print(f"  Scopes: {stats.get('scopes', 0)}")
+                console.print(f"  Modifiers: {stats.get('modifiers', 0)}")
+                console.print(f"  On Actions: {stats.get('on_actions', 0)}")
+            except Exception as e:
+                console.print(f"[red]Update failed: {e}[/red]")
 
 
 @main.command()
