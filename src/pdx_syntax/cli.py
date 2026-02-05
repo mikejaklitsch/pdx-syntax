@@ -50,6 +50,56 @@ def init(ctx):
 
 
 @main.command()
+@click.pass_context
+def info(ctx):
+    """Show quick reference for EU5 scripting syntax lookup.
+
+    Run this to see common usage patterns and examples.
+    """
+    info_text = """
+[bold cyan]pdx-syntax - EU5 Script Syntax Reference[/bold cyan]
+
+[bold]Search Commands:[/bold]
+  effect <query>     Search effects (e.g., add_gold, create_character)
+  trigger <query>    Search triggers (e.g., has_variable, is_at_war)
+  scope <query>      Search scopes/iterators (e.g., every_country)
+  modifier <query>   Search modifiers (e.g., discipline, tax_modifier)
+  on-action <query>  Search on_actions (e.g., on_war_declared)
+
+[bold]Common Options:[/bold]
+  -s, --scope TYPE   Filter by scope (country, character, location, etc.)
+  -c, --category CAT Filter by category
+  -n, --limit N      Max results (default: 10)
+  --exact            Exact name match only
+
+[bold]Examples:[/bold]
+  pdx-syntax effect add_gold              # Find gold-related effects
+  pdx-syntax effect create -s country     # Country-scoped create effects
+  pdx-syntax trigger war                  # War-related triggers
+  pdx-syntax scope every_ --iterator      # All 'every_' iterators
+  pdx-syntax modifier discipline --exact  # Exact match for discipline
+  pdx-syntax template event_structure     # Show event template
+
+[bold]Iterator Patterns:[/bold]
+  any_<target>     Trigger iterator (checks if any match)
+  every_<target>   Effect iterator (applies to all)
+  random_<target>  Effect iterator (picks one random)
+  ordered_<target> Effect iterator (sorted order)
+
+[bold]Scope Types:[/bold]
+  none, country, character, location, area, region, war, unit,
+  building, market, trade, culture, religion, dynasty, pop, etc.
+
+[bold]Data Management:[/bold]
+  pdx-syntax stats                   # Show database counts
+  pdx-syntax update --comprehensive  # Full wiki scrape
+  pdx-syntax changes 1.1.0           # Version-specific changes
+  pdx-syntax templates               # List syntax templates
+"""
+    console.print(info_text)
+
+
+@main.command()
 @click.argument("query")
 @click.option("-s", "--scope", help="Filter by scope type")
 @click.option("-c", "--category", help="Filter by category")
