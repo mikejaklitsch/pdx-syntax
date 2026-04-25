@@ -1,6 +1,20 @@
 # pdx-syntax
 
-CLI tool for querying Europa Universalis 5 Paradox script syntax. Provides fast fuzzy search for effects, triggers, scopes, modifiers, and on_actions.
+CLI tool for querying Europa Universalis 5 script syntax. EU5 launched after most LLMs were trained, so AI coding assistants have no knowledge of the game's scripting language. This tool provides a queryable SQLite knowledge base seeded from scraped game data, so LLMs can look up correct syntax instead of hallucinating it. Search uses rapidfuzz for fuzzy matching and SQLite FTS5 for full-text queries across effects, triggers, scopes, modifiers, on-actions, data types, and custom localization functions.
+
+## Scope & Purpose
+
+**What this tool does:**
+- Quick lookups of EU5 script syntax elements by name
+- Fuzzy search with filtering by scope type, category
+- Display syntax patterns, parameters, usage examples
+- Track version changes (added/deprecated items)
+
+**What this tool does NOT do:**
+- Syntax validation or linting of your script files
+- Code generation or scaffolding
+- Parsing live game files for data extraction
+- IDE/editor integration
 
 ## Installation
 
@@ -84,12 +98,49 @@ Modifier specific:
 - `-s, --scope TYPE` - Filter by scope type
 - `--boolean` - Show only boolean modifiers
 
+## Output Fields
+
+Search results include these fields when available:
+
+| Field | Description |
+|-------|-------------|
+| `name` | The script keyword (e.g., `add_gold`, `any_country`) |
+| `description` | What the item does |
+| `syntax` | Usage pattern (e.g., `add_gold = <amount>`) |
+| `parameters` | Expected parameter types/values |
+| `example` | Code example showing typical usage |
+| `scope_type` | Required scope context (country, character, etc.) |
+| `category` | Functional grouping (economy, military, flow, etc.) |
+
+## Data Quality Notes
+
+The seed data is manually curated from the EU5 wiki and modding digests. Coverage varies:
+
+- **Flow triggers & effects:** Good syntax/parameter coverage, some examples
+- **Modifiers:** Name and category complete, syntax added for common ones
+- **On_actions:** Basic structure documented, parameter scopes listed
+- **Iterators:** Syntax patterns complete, parameters documented
+
+If you find missing or incorrect data, contributions are welcome.
+
 ## Data Sources
 
 Data is sourced from:
 
 - [EU5 Wiki](https://eu5.paradoxwikis.com/) - Effects, triggers, scopes, modifiers
 - [Modding Digests](https://github.com/Europa-Universalis-5-Modding-Co-op/modding-digests) - Version changes
+
+## Contributing Data
+
+To improve the seed data:
+
+1. Edit `src/pdx_syntax/data/initial_data.py`
+2. Add/update entries with:
+   - `syntax`: The usage pattern
+   - `parameters`: Expected values/types
+   - `example`: Working code snippet
+3. Run `pdx-syntax seed --force` to reload
+4. Submit a PR
 
 ## Rate Limiting
 
