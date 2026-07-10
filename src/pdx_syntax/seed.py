@@ -68,8 +68,8 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
     all_triggers = FLOW_TRIGGERS + VARIABLE_TRIGGERS + GAME_STATE_TRIGGERS
     for trigger in all_triggers:
         cursor.execute("""
-            INSERT OR REPLACE INTO triggers (name, category, description, syntax, scope_type, parameters, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO triggers (name, category, description, syntax, scope_type, parameters, example, source_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trigger["name"],
             trigger.get("category"),
@@ -77,6 +77,7 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
             trigger.get("syntax"),
             trigger.get("scope_type"),
             trigger.get("parameters"),
+            trigger.get("example"),
             source_id,
         ))
         stats["triggers"] += 1
@@ -86,8 +87,8 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
     for scope in ITERATOR_SCOPES:
         cursor.execute("""
             INSERT OR REPLACE INTO scopes
-            (name, scope_type, target_type, description, syntax, parameters, is_iterator, iterator_type, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (name, scope_type, target_type, description, syntax, parameters, example, is_iterator, iterator_type, source_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             scope["name"],
             scope.get("scope_type"),
@@ -95,6 +96,7 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
             scope.get("description"),
             scope.get("syntax"),
             scope.get("parameters"),
+            scope.get("example"),
             scope.get("is_iterator", 0),
             scope.get("iterator_type"),
             source_id,
@@ -105,8 +107,8 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
     # Seed effects
     for effect in EFFECTS:
         cursor.execute("""
-            INSERT OR REPLACE INTO effects (name, category, description, syntax, scope_type, parameters, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO effects (name, category, description, syntax, scope_type, parameters, example, source_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             effect["name"],
             effect.get("category"),
@@ -114,6 +116,7 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
             effect.get("syntax"),
             effect.get("scope_type"),
             effect.get("parameters"),
+            effect.get("example"),
             source_id,
         ))
         stats["effects"] += 1
@@ -123,8 +126,8 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
     for modifier in MODIFIERS:
         cursor.execute("""
             INSERT OR REPLACE INTO modifiers
-            (name, category, description, modifier_type, scope_type, is_boolean, default_value, color, percent, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (name, category, description, modifier_type, scope_type, is_boolean, default_value, color, percent, syntax, parameters, source_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             modifier["name"],
             modifier.get("category"),
@@ -135,6 +138,8 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
             modifier.get("default_value"),
             modifier.get("color"),
             modifier.get("percent", 0),
+            modifier.get("syntax"),
+            modifier.get("parameters"),
             source_id,
         ))
         stats["modifiers"] += 1
@@ -143,13 +148,14 @@ def seed_database(db_path: Optional[Path] = None, force: bool = False) -> dict:
     # Seed on_actions
     for on_action in ON_ACTIONS:
         cursor.execute("""
-            INSERT OR REPLACE INTO on_actions (name, category, description, scope_type, parameters, source_id)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO on_actions (name, category, description, scope_type, syntax, parameters, source_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             on_action["name"],
             on_action.get("category"),
             on_action.get("description"),
             on_action.get("scope_type"),
+            on_action.get("syntax"),
             on_action.get("parameters"),
             source_id,
         ))

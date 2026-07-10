@@ -28,9 +28,6 @@ dependencies = [
     "click>=8.0",
     "rich>=13.0",
     "rapidfuzz>=3.0",
-    "httpx>=0.25",
-    "beautifulsoup4>=4.12",
-    "lxml>=5.0",
 ]
 
 [project.optional-dependencies]

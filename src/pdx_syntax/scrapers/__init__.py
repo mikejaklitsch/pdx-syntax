@@ -1,1 +1,1 @@
-"""Web scrapers for EU5 wiki and modding digests."""
+"""Scrapers for EU5 modding data sources."""

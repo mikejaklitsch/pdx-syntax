@@ -43,6 +43,11 @@ FLOW_TRIGGERS = [
         "description": "All inside trigger must be true",
         "syntax": "and = { <triggers> }",
         "scope_type": "none",
+        "example": """and = {
+    is_at_war = yes
+    has_manpower >= 10000
+    gold >= 100
+}""",
     },
     {
         "name": "or",
@@ -50,6 +55,11 @@ FLOW_TRIGGERS = [
         "description": "At least one entry inside trigger must be true",
         "syntax": "or = { <triggers> }",
         "scope_type": "none",
+        "example": """or = {
+    tag = FRA
+    tag = ENG
+    tag = CAS
+}""",
     },
     {
         "name": "not",
@@ -117,6 +127,10 @@ FLOW_TRIGGERS = [
         "syntax": "trigger_if = { limit = { <triggers> } <display_triggers> }",
         "scope_type": "none",
         "parameters": "limit",
+        "example": """trigger_if = {
+    limit = { is_at_war = yes }
+    has_manpower >= 10000
+}""",
     },
     {
         "name": "trigger_else_if",
@@ -418,6 +432,17 @@ ITERATOR_SCOPES = [
         "iterator_type": "trigger",
         "syntax": "any_country = { <triggers> }",
         "parameters": "filter, count/percent (optional)",
+        "example": """# Check if any country is at war with us
+any_country = {
+    is_enemy = root
+    army_size >= 50000
+}
+
+# With count requirement
+any_country = {
+    count >= 3
+    has_opinion = { target = root value >= 100 }
+}""",
     },
     {
         "name": "every_country",
@@ -428,6 +453,13 @@ ITERATOR_SCOPES = [
         "iterator_type": "effect",
         "syntax": "every_country = { limit = { } <effects> }",
         "parameters": "limit (optional)",
+        "example": """every_country = {
+    limit = {
+        is_at_war = no
+        gold >= 100
+    }
+    add_prestige = 10
+}""",
     },
     {
         "name": "random_country",
@@ -510,6 +542,11 @@ ITERATOR_SCOPES = [
         "iterator_type": "trigger",
         "syntax": "any_owned_location = { <triggers> }",
         "parameters": "filter, count/percent (optional)",
+        "example": """# Check if any owned province has high development
+any_owned_location = {
+    development >= 20
+    has_building = workshop
+}""",
     },
     {
         "name": "every_owned_location",
@@ -690,6 +727,11 @@ EFFECTS = [
         "syntax": "add_gold = <amount>",
         "scope_type": "country",
         "parameters": "amount (number or script value)",
+        "example": """# Add 100 gold
+add_gold = 100
+
+# Remove 50 gold
+add_gold = -50""",
     },
     {
         "name": "add_treasury",
@@ -781,6 +823,17 @@ EFFECTS = [
         "syntax": "set_variable = { name = <name> value = <value> }",
         "scope_type": "any",
         "parameters": "name, value",
+        "example": """# Set a numeric variable
+set_variable = {
+    name = my_counter
+    value = 5
+}
+
+# Set a scope variable
+set_variable = {
+    name = my_target
+    value = scope:actor
+}""",
     },
     {
         "name": "set_local_variable",
@@ -881,6 +934,15 @@ EFFECTS = [
         "syntax": "create_character = { <character_definition> }",
         "scope_type": "country",
         "parameters": "name, culture, religion, age, skills, traits, etc.",
+        "example": """create_character = {
+    name = "John Smith"
+    culture = english
+    religion = catholic
+    age = 30
+    male = yes
+    traits = { brave skilled_tactician }
+    save_scope_as = new_general
+}""",
     },
     {
         "name": "kill_character",
@@ -1029,24 +1091,28 @@ ON_ACTIONS = [
         "category": "pulse",
         "description": "Fires at game initialization",
         "scope_type": "none",
+        "syntax": "on_game_start = { effect = { <effects> } }",
     },
     {
         "name": "monthly_country_pulse",
         "category": "pulse",
         "description": "Fires monthly for each country",
         "scope_type": "country",
+        "syntax": "monthly_country_pulse = { trigger = { } effect = { } random_events = { } }",
     },
     {
         "name": "yearly_country_pulse",
         "category": "pulse",
         "description": "Fires yearly for each country",
         "scope_type": "country",
+        "syntax": "yearly_country_pulse = { trigger = { } effect = { } random_events = { } }",
     },
     {
         "name": "four_yearly_country_pulse",
         "category": "pulse",
         "description": "Fires every 4 years for each country",
         "scope_type": "country",
+        "syntax": "four_yearly_country_pulse = { trigger = { } effect = { } random_events = { } }",
     },
     # Character on_actions
     {
@@ -1055,6 +1121,7 @@ ON_ACTIONS = [
         "description": "Fires when a character dies",
         "scope_type": "country",
         "parameters": "scope:target = deceased character",
+        "syntax": "on_character_death = { trigger = { } effect = { } }",
     },
     {
         "name": "on_new_ruler",
@@ -1062,6 +1129,7 @@ ON_ACTIONS = [
         "description": "Fires when a new ruler takes power",
         "scope_type": "country",
         "parameters": "scope:old_ruler, scope:new_ruler",
+        "syntax": "on_new_ruler = { trigger = { } effect = { } }",
     },
     {
         "name": "on_heir_born",
@@ -1069,6 +1137,7 @@ ON_ACTIONS = [
         "description": "Fires when an heir is born",
         "scope_type": "country",
         "parameters": "scope:child",
+        "syntax": "on_heir_born = { trigger = { } effect = { } }",
     },
     # War on_actions
     {
@@ -1077,6 +1146,7 @@ ON_ACTIONS = [
         "description": "Fires when war is declared",
         "scope_type": "country",
         "parameters": "scope:actor, scope:recipient, scope:war",
+        "syntax": "on_war_declared = { trigger = { } effect = { } }",
     },
     {
         "name": "on_war_ended",
@@ -1084,6 +1154,7 @@ ON_ACTIONS = [
         "description": "Fires when a war ends",
         "scope_type": "country",
         "parameters": "scope:war",
+        "syntax": "on_war_ended = { trigger = { } effect = { } }",
     },
     {
         "name": "on_battle_won",
@@ -1091,6 +1162,7 @@ ON_ACTIONS = [
         "description": "Fires when a battle is won",
         "scope_type": "country",
         "parameters": "scope:target location, killed/lost counts",
+        "syntax": "on_battle_won = { trigger = { } effect = { } }",
     },
     {
         "name": "on_battle_lost",
@@ -1098,6 +1170,7 @@ ON_ACTIONS = [
         "description": "Fires when a battle is lost",
         "scope_type": "country",
         "parameters": "scope:target location, killed/lost counts",
+        "syntax": "on_battle_lost = { trigger = { } effect = { } }",
     },
     {
         "name": "on_siege_won",
@@ -1105,6 +1178,7 @@ ON_ACTIONS = [
         "description": "Fires when a siege is won",
         "scope_type": "country",
         "parameters": "scope:target location",
+        "syntax": "on_siege_won = { trigger = { } effect = { } }",
     },
     # Diplomacy on_actions
     {
@@ -1113,6 +1187,7 @@ ON_ACTIONS = [
         "description": "Fires when a country is annexed",
         "scope_type": "country",
         "parameters": "scope:target = annexed country",
+        "syntax": "on_annexed = { trigger = { } effect = { } }",
     },
     {
         "name": "on_alliance_formed",
@@ -1120,6 +1195,7 @@ ON_ACTIONS = [
         "description": "Fires when an alliance is formed",
         "scope_type": "country",
         "parameters": "scope:ally",
+        "syntax": "on_alliance_formed = { trigger = { } effect = { } }",
     },
     {
         "name": "on_alliance_broken",
@@ -1127,6 +1203,7 @@ ON_ACTIONS = [
         "description": "Fires when an alliance is broken",
         "scope_type": "country",
         "parameters": "scope:former_ally",
+        "syntax": "on_alliance_broken = { trigger = { } effect = { } }",
     },
     # Province on_actions
     {
@@ -1135,6 +1212,7 @@ ON_ACTIONS = [
         "description": "Fires when capital is moved",
         "scope_type": "country",
         "parameters": "scope:old_capital, scope:new_capital",
+        "syntax": "on_capital_moved = { trigger = { } effect = { } }",
     },
     {
         "name": "on_province_gained",
@@ -1142,6 +1220,7 @@ ON_ACTIONS = [
         "description": "Fires when a province is gained",
         "scope_type": "country",
         "parameters": "scope:target = province",
+        "syntax": "on_province_gained = { trigger = { } effect = { } }",
     },
     {
         "name": "on_province_lost",
@@ -1149,6 +1228,7 @@ ON_ACTIONS = [
         "description": "Fires when a province is lost",
         "scope_type": "country",
         "parameters": "scope:target = province",
+        "syntax": "on_province_lost = { trigger = { } effect = { } }",
     },
     # Government on_actions
     {
@@ -1156,12 +1236,14 @@ ON_ACTIONS = [
         "category": "government",
         "description": "Fires when an election occurs",
         "scope_type": "country",
+        "syntax": "on_election = { trigger = { } effect = { } }",
     },
     {
         "name": "on_government_changed",
         "category": "government",
         "description": "Fires when government type changes",
         "scope_type": "country",
+        "syntax": "on_government_changed = { trigger = { } effect = { } }",
     },
 ]
 
@@ -1290,6 +1372,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "discipline = <value>",
+        "parameters": "decimal (e.g., 0.05 = +5%)",
     },
     {
         "name": "land_morale",
@@ -1298,6 +1382,8 @@ MODIFIERS = [
         "scope_type": "country",
         "modifier_type": "additive",
         "is_boolean": 0,
+        "syntax": "land_morale = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "naval_morale",
@@ -1306,6 +1392,8 @@ MODIFIERS = [
         "scope_type": "country",
         "modifier_type": "additive",
         "is_boolean": 0,
+        "syntax": "naval_morale = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "army_maintenance",
@@ -1315,6 +1403,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "army_maintenance = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% cost)",
     },
     {
         "name": "navy_maintenance",
@@ -1324,6 +1414,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "navy_maintenance = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% cost)",
     },
     {
         "name": "manpower_recovery_speed",
@@ -1333,6 +1425,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "manpower_recovery_speed = <value>",
+        "parameters": "decimal (e.g., 0.20 = +20%)",
     },
     {
         "name": "infantry_power",
@@ -1342,6 +1436,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "infantry_power = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "cavalry_power",
@@ -1351,6 +1447,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "cavalry_power = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "artillery_power",
@@ -1360,6 +1458,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "artillery_power = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     # Economy modifiers
     {
@@ -1370,6 +1470,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "tax_modifier = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "production_efficiency",
@@ -1379,6 +1481,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "production_efficiency = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "trade_efficiency",
@@ -1388,6 +1492,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "trade_efficiency = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "global_trade_power",
@@ -1397,6 +1503,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "global_trade_power = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "construction_cost",
@@ -1406,6 +1514,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "construction_cost = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% cost)",
     },
     {
         "name": "build_cost",
@@ -1415,6 +1525,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "build_cost = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% cost)",
     },
     # Diplomacy modifiers
     {
@@ -1424,6 +1536,8 @@ MODIFIERS = [
         "scope_type": "country",
         "modifier_type": "additive",
         "is_boolean": 0,
+        "syntax": "diplomatic_reputation = <value>",
+        "parameters": "integer (e.g., 1 = +1 diplo rep)",
     },
     {
         "name": "improve_relations_modifier",
@@ -1433,6 +1547,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "improve_relations_modifier = <value>",
+        "parameters": "decimal (e.g., 0.25 = +25%)",
     },
     {
         "name": "ae_impact",
@@ -1442,6 +1558,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "ae_impact = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% AE)",
     },
     {
         "name": "annexation_speed_base",
@@ -1450,6 +1568,8 @@ MODIFIERS = [
         "scope_type": "country",
         "modifier_type": "additive",
         "is_boolean": 0,
+        "syntax": "annexation_speed_base = <value>",
+        "parameters": "decimal",
     },
     {
         "name": "annexation_speed_modifier",
@@ -1459,6 +1579,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "annexation_speed_modifier = <value>",
+        "parameters": "decimal (e.g., 0.25 = +25%)",
     },
     # Government modifiers
     {
@@ -1468,6 +1590,8 @@ MODIFIERS = [
         "scope_type": "country",
         "modifier_type": "additive",
         "is_boolean": 0,
+        "syntax": "legitimacy = <value>",
+        "parameters": "decimal (e.g., 0.5 = +0.5/year)",
     },
     {
         "name": "stability_cost_modifier",
@@ -1477,6 +1601,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "stability_cost_modifier = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% cost)",
     },
     {
         "name": "advisor_cost",
@@ -1486,6 +1612,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "advisor_cost = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% cost)",
     },
     # Technology modifiers
     {
@@ -1496,6 +1624,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "technology_cost = <value>",
+        "parameters": "decimal (e.g., -0.05 = -5% cost)",
     },
     {
         "name": "idea_cost",
@@ -1505,6 +1635,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "idea_cost = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% cost)",
     },
     # Location modifiers
     {
@@ -1515,6 +1647,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "local_development_cost = <value>",
+        "parameters": "decimal (e.g., -0.10 = -10% cost)",
     },
     {
         "name": "local_tax_modifier",
@@ -1524,6 +1658,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "local_tax_modifier = <value>",
+        "parameters": "decimal (e.g., 0.15 = +15%)",
     },
     {
         "name": "local_production_efficiency",
@@ -1533,6 +1669,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "local_production_efficiency = <value>",
+        "parameters": "decimal (e.g., 0.10 = +10%)",
     },
     {
         "name": "local_manpower_modifier",
@@ -1542,6 +1680,8 @@ MODIFIERS = [
         "modifier_type": "multiplicative",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "local_manpower_modifier = <value>",
+        "parameters": "decimal (e.g., 0.25 = +25%)",
     },
     {
         "name": "devastation",
@@ -1550,6 +1690,8 @@ MODIFIERS = [
         "scope_type": "location",
         "modifier_type": "additive",
         "is_boolean": 0,
+        "syntax": "devastation = <value>",
+        "parameters": "integer (0-100)",
     },
     # Boolean modifiers
     {
@@ -1559,6 +1701,8 @@ MODIFIERS = [
         "scope_type": "country",
         "modifier_type": "boolean",
         "is_boolean": 1,
+        "syntax": "can_colonize = yes",
+        "parameters": "yes/no",
     },
     {
         "name": "female_advisor_chance",
@@ -1568,6 +1712,8 @@ MODIFIERS = [
         "modifier_type": "additive",
         "is_boolean": 0,
         "percent": 1,
+        "syntax": "female_advisor_chance = <value>",
+        "parameters": "decimal (e.g., 0.25 = 25% chance)",
     },
 ]
 

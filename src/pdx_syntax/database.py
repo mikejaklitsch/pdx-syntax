@@ -112,6 +112,7 @@ def init_database(db_path: Optional[Path] = None) -> None:
             description TEXT,
             syntax TEXT,
             parameters TEXT,
+            example TEXT,
             is_iterator INTEGER DEFAULT 0,
             iterator_type TEXT,
             added_version TEXT,
@@ -134,6 +135,8 @@ def init_database(db_path: Optional[Path] = None) -> None:
             default_value TEXT,
             color TEXT,
             percent INTEGER DEFAULT 0,
+            syntax TEXT,
+            parameters TEXT,
             added_version TEXT,
             deprecated_version TEXT,
             source_id INTEGER,
@@ -149,6 +152,7 @@ def init_database(db_path: Optional[Path] = None) -> None:
             category TEXT,
             description TEXT,
             scope_type TEXT,
+            syntax TEXT,
             parameters TEXT,
             example TEXT,
             added_version TEXT,
@@ -202,6 +206,37 @@ def init_database(db_path: Optional[Path] = None) -> None:
         )
     """)
 
+    # Custom localization functions
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS custom_localizations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            scope TEXT,
+            random_valid INTEGER DEFAULT 0,
+            entries TEXT,
+            added_version TEXT,
+            source_id INTEGER,
+            FOREIGN KEY (source_id) REFERENCES data_sources(id)
+        )
+    """)
+
+    # Data types (promotes, functions, types from script/gui/common/etc.)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS data_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            parent_type TEXT,
+            args TEXT,
+            description TEXT,
+            definition_type TEXT,
+            return_type TEXT,
+            source_category TEXT,
+            added_version TEXT,
+            source_id INTEGER,
+            FOREIGN KEY (source_id) REFERENCES data_sources(id)
+        )
+    """)
+
     # Change log for tracking modifications across versions
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS change_log (
@@ -231,6 +266,10 @@ def init_database(db_path: Optional[Path] = None) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_modifiers_name ON modifiers(name)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_modifiers_category ON modifiers(category)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_on_actions_name ON on_actions(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_custom_loc_name ON custom_localizations(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_data_types_name ON data_types(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_data_types_parent ON data_types(parent_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_data_types_category ON data_types(source_category)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_change_log_version ON change_log(game_version)")
 
     # Full-text search tables (standalone, manually synced)
@@ -254,6 +293,29 @@ def init_database(db_path: Optional[Path] = None) -> None:
             name, category, description, modifier_type
         )
     """)
+    cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS custom_localizations_fts USING fts5(
+            name, scope, entries
+        )
+    """)
+    cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS data_types_fts USING fts5(
+            name, description, definition_type, return_type
+        )
+    """)
+
+    # Notes (user/Claude annotations on entries)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_type TEXT NOT NULL,
+            item_name TEXT NOT NULL,
+            content TEXT NOT NULL,
+            author TEXT DEFAULT 'user',
+            created_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_item ON notes(item_type, item_name)")
 
     # Record schema version
     cursor.execute("""
@@ -316,6 +378,20 @@ def rebuild_fts_indexes(db_path: Optional[Path] = None) -> None:
     cursor.execute("""
         INSERT INTO modifiers_fts(rowid, name, category, description, modifier_type)
         SELECT id, name, category, description, modifier_type FROM modifiers
+    """)
+
+    # Rebuild custom_localizations FTS
+    cursor.execute("DELETE FROM custom_localizations_fts")
+    cursor.execute("""
+        INSERT INTO custom_localizations_fts(rowid, name, scope, entries)
+        SELECT id, name, scope, entries FROM custom_localizations
+    """)
+
+    # Rebuild data_types FTS
+    cursor.execute("DELETE FROM data_types_fts")
+    cursor.execute("""
+        INSERT INTO data_types_fts(rowid, name, description, definition_type, return_type)
+        SELECT id, name, description, definition_type, return_type FROM data_types
     """)
 
     conn.commit()

@@ -1,6 +1,7 @@
 """Search functionality for EU5 syntax database."""
 
 import sqlite3
+from datetime import datetime
 from typing import Optional
 from pathlib import Path
 
@@ -59,7 +60,71 @@ def fuzzy_search(
 
     # Sort by score descending and limit
     results.sort(key=lambda x: x["_score"], reverse=True)
-    return results[:limit]
+
+    # Deduplicate by name, keeping highest score
+    seen = set()
+    deduped = []
+    for r in results:
+        if r["name"] not in seen:
+            seen.add(r["name"])
+            deduped.append(r)
+    return deduped[:limit]
+
+
+MAIN_TABLES = [
+    "effects", "triggers", "scopes", "modifiers", "on_actions",
+    "data_types", "custom_localizations",
+]
+
+
+def suggest_similar(
+    query: str,
+    item_type: str,
+    limit: int = 5,
+    threshold: int = 60,
+    db_path: Optional[Path] = None,
+) -> list[tuple[str, int]]:
+    """Fuzzy-match query against all names in a table, for did-you-mean
+    suggestions. Returns [(name, score)] best-first."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(f"SELECT name FROM {item_type}")
+        names = [r[0] for r in cursor.fetchall()]
+    except sqlite3.OperationalError:
+        names = []
+    finally:
+        conn.close()
+    if not names:
+        return []
+    matches = process.extract(query, names, scorer=fuzz.WRatio, limit=limit)
+    return [(m, int(score)) for m, score, _ in matches if score >= threshold]
+
+
+def find_in_other_tables(
+    name: str,
+    exclude: str,
+    db_path: Optional[Path] = None,
+) -> list[str]:
+    """Exact-name lookup across all main tables except `exclude`.
+    Returns table names that contain the entry."""
+    hits = []
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    try:
+        for table in MAIN_TABLES:
+            if table == exclude:
+                continue
+            try:
+                cursor.execute(f"SELECT 1 FROM {table} WHERE name = ? LIMIT 1",
+                               (name,))
+                if cursor.fetchone():
+                    hits.append(table)
+            except sqlite3.OperationalError:
+                continue
+    finally:
+        conn.close()
+    return hits
 
 
 def search_effects(
@@ -101,7 +166,15 @@ def search_effects(
             results.append(row_dict)
 
     results.sort(key=lambda x: x["_score"], reverse=True)
-    return results[:limit]
+
+    # Deduplicate by name, keeping highest score
+    seen = set()
+    deduped = []
+    for r in results:
+        if r["name"] not in seen:
+            seen.add(r["name"])
+            deduped.append(r)
+    return deduped[:limit]
 
 
 def search_triggers(
@@ -141,7 +214,15 @@ def search_triggers(
             results.append(row_dict)
 
     results.sort(key=lambda x: x["_score"], reverse=True)
-    return results[:limit]
+
+    # Deduplicate by name, keeping highest score
+    seen = set()
+    deduped = []
+    for r in results:
+        if r["name"] not in seen:
+            seen.add(r["name"])
+            deduped.append(r)
+    return deduped[:limit]
 
 
 def search_scopes(
@@ -180,7 +261,15 @@ def search_scopes(
             results.append(row_dict)
 
     results.sort(key=lambda x: x["_score"], reverse=True)
-    return results[:limit]
+
+    # Deduplicate by name, keeping highest score
+    seen = set()
+    deduped = []
+    for r in results:
+        if r["name"] not in seen:
+            seen.add(r["name"])
+            deduped.append(r)
+    return deduped[:limit]
 
 
 def search_modifiers(
@@ -224,7 +313,15 @@ def search_modifiers(
             results.append(row_dict)
 
     results.sort(key=lambda x: x["_score"], reverse=True)
-    return results[:limit]
+
+    # Deduplicate by name, keeping highest score
+    seen = set()
+    deduped = []
+    for r in results:
+        if r["name"] not in seen:
+            seen.add(r["name"])
+            deduped.append(r)
+    return deduped[:limit]
 
 
 def search_on_actions(
@@ -259,7 +356,15 @@ def search_on_actions(
             results.append(row_dict)
 
     results.sort(key=lambda x: x["_score"], reverse=True)
-    return results[:limit]
+
+    # Deduplicate by name, keeping highest score
+    seen = set()
+    deduped = []
+    for r in results:
+        if r["name"] not in seen:
+            seen.add(r["name"])
+            deduped.append(r)
+    return deduped[:limit]
 
 
 def fts_search(
@@ -349,6 +454,173 @@ def get_by_name(
     conn.close()
 
     return dict(row) if row else None
+
+
+def search_data_types(
+    query: str,
+    parent_type: Optional[str] = None,
+    source_category: Optional[str] = None,
+    definition_type: Optional[str] = None,
+    limit: int = 10,
+    db_path: Optional[Path] = None,
+) -> list[dict]:
+    """Search data types by name or description."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+
+    sql = "SELECT * FROM data_types WHERE 1=1"
+    params: list = []
+
+    if parent_type:
+        sql += " AND parent_type = ?"
+        params.append(parent_type)
+
+    if source_category:
+        sql += " AND source_category = ?"
+        params.append(source_category)
+
+    if definition_type:
+        sql += " AND definition_type = ?"
+        params.append(definition_type)
+
+    # Pre-filter with LIKE to avoid fuzzy scoring 25k+ rows
+    sql += " AND name LIKE ?"
+    params.append(f"%{query}%")
+
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        row_dict = dict(row)
+        searchable = f"{row_dict.get('name', '')} {row_dict.get('description', '')}"
+        score = fuzz.partial_ratio(query.lower(), searchable.lower())
+
+        if score >= 50:
+            row_dict["_score"] = score
+            results.append(row_dict)
+
+    results.sort(key=lambda x: x["_score"], reverse=True)
+
+    seen = set()
+    deduped = []
+    for r in results:
+        if r["name"] not in seen:
+            seen.add(r["name"])
+            deduped.append(r)
+    return deduped[:limit]
+
+
+def search_custom_localizations(
+    query: str,
+    scope: Optional[str] = None,
+    search_entries: bool = False,
+    limit: int = 10,
+    db_path: Optional[Path] = None,
+) -> list[dict]:
+    """Search custom localizations by name, or by entries content.
+
+    When *search_entries* is True, filters rows whose entries text
+    contains the query (SQL LIKE) and ranks by name similarity.
+    Otherwise fuzzy-matches on name only.
+    """
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+
+    sql = "SELECT * FROM custom_localizations WHERE 1=1"
+    params: list = []
+
+    if scope:
+        sql += " AND scope = ?"
+        params.append(scope)
+
+    if search_entries:
+        sql += " AND entries LIKE ?"
+        params.append(f"%{query}%")
+
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        row_dict = dict(row)
+        searchable = row_dict.get("name", "")
+        score = fuzz.partial_ratio(query.lower(), searchable.lower())
+
+        if search_entries or score >= 50:
+            row_dict["_score"] = score
+            results.append(row_dict)
+
+    results.sort(key=lambda x: x["_score"], reverse=True)
+
+    seen = set()
+    deduped = []
+    for r in results:
+        if r["name"] not in seen:
+            seen.add(r["name"])
+            deduped.append(r)
+    return deduped[:limit]
+
+
+def add_note(
+    item_type: str,
+    item_name: str,
+    content: str,
+    author: str = "user",
+    db_path: Optional[Path] = None,
+) -> int:
+    """Add a note to an item. Returns the note ID."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO notes (item_type, item_name, content, author, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (item_type, item_name, content, author, datetime.now().isoformat()))
+    note_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return note_id
+
+
+def get_notes(
+    item_type: str,
+    item_name: str,
+    db_path: Optional[Path] = None,
+) -> list[dict]:
+    """Get all notes for an item."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM notes
+        WHERE item_type = ? AND item_name = ?
+        ORDER BY created_at
+    """, (item_type, item_name))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_all_notes(db_path: Optional[Path] = None) -> list[dict]:
+    """Get all notes across all items."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM notes ORDER BY item_type, item_name, created_at")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def delete_note(note_id: int, db_path: Optional[Path] = None) -> bool:
+    """Delete a note by ID. Returns True if a row was deleted."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 def get_changes_for_version(

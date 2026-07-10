@@ -2,13 +2,10 @@
 
 import click
 from pathlib import Path
-from typing import Optional
-
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
-from rich.markdown import Markdown
 
 from .database import init_database, DEFAULT_DB_PATH
 from .search import (
@@ -17,17 +14,25 @@ from .search import (
     search_scopes,
     search_modifiers,
     search_on_actions,
+    search_data_types,
+    search_custom_localizations,
     fts_search,
     list_categories,
     list_scope_types,
     get_by_name,
+    suggest_similar,
+    find_in_other_tables,
     get_changes_for_version,
+    add_note,
+    get_notes,
+    get_all_notes,
+    delete_note,
 )
 
 console = Console()
 
 
-@click.group()
+@click.group(context_settings={"token_normalize_func": lambda x: x.replace("_", "-")})
 @click.option("--db", type=click.Path(), help="Database file path")
 @click.pass_context
 def main(ctx, db):
@@ -37,7 +42,9 @@ def main(ctx, db):
     for Europa Universalis 5 modding.
     """
     ctx.ensure_object(dict)
-    ctx.obj["db_path"] = Path(db) if db else DEFAULT_DB_PATH
+    db_path = Path(db) if db else DEFAULT_DB_PATH
+    ctx.obj["db_path"] = db_path
+    init_database(db_path)
 
 
 @main.command()
@@ -49,54 +56,97 @@ def init(ctx):
     console.print(f"[green]Database initialized at {db_path}[/green]")
 
 
+GUIDE_TEXT = """
+[bold cyan]pdx-syntax - Search Guide[/bold cyan]
+
+The database has 7 searchable tables.  Entries can appear in more than one.
+
+[bold]EFFECTS[/bold]  [dim]pdx-syntax effect <query>[/dim]
+  Commands that change game state: add_gold, create_character, set_variable, etc.
+  [dim]Includes iterator effects (every_*, random_*, ordered_*).[/dim]
+  Filters: -s/--scope <type>  -c/--category <cat>
+
+[bold]TRIGGERS[/bold]  [dim]pdx-syntax trigger <query>[/dim]
+  Conditions that check game state: has_gold, is_at_war, num_of_cities, etc.
+  [dim]Includes iterator triggers (any_*).[/dim]
+  Filters: -s/--scope <type>  -c/--category <cat>
+
+[bold]SCOPES[/bold]  [dim]pdx-syntax scope <query>[/dim]
+  Event targets that change scope context plus ALL iterators cross-populated
+  from effects and triggers.  Best single table for finding iterators.
+  Filters: -t/--type <scope_type>  --iterator
+
+[bold]MODIFIERS[/bold]  [dim]pdx-syntax modifier <query>[/dim]
+  Numeric and boolean stat modifiers: discipline, tax_modifier, etc.
+  Filters: -c/--category <cat>  -s/--scope <type>  --boolean
+
+[bold]ON ACTIONS[/bold]  [dim]pdx-syntax on-action <query>[/dim]
+  Hooks fired by the engine: on_war_declared, on_monthly, on_death, etc.
+  Filters: -s/--scope <type>
+
+[bold]DATA TYPES[/bold]  [dim]pdx-syntax promote <query>[/dim]
+  Promotes, functions, and types for script/GUI/loc: GetCapital, MakeScope.
+  Filters: -t/--type <parent_type>  -c/--category  -d/--definition <def_type>
+
+[bold]CUSTOM LOCALIZATIONS[/bold]  [dim]pdx-syntax custom-loc <query>[/dim]
+  Custom loc functions with entry keys for dynamic text.
+  Filters: -s/--scope  -e/--entries (search within entry keys)
+
+[bold]Search strategy when you can't find something:[/bold]
+  1. Try a shorter or broader query — "gold" finds add_gold, has_gold, etc.
+  2. Wrong table?  Iterators (every_/any_/random_/ordered_) live in scopes,
+     effects, AND triggers.  An "add_" or "set_" is an effect.  A "has_" or
+     "is_" or "num_" is a trigger.  A stat name is a modifier.
+  3. Use --exact for precise name lookups, omit it for fuzzy matching.
+  4. Try pdx-syntax search "<words>" -t <type> for full-text search.
+  5. Check pdx-syntax stats to confirm the database is populated.
+  6. Run pdx-syntax categories -t <type> to see valid category filters.
+"""
+
+
+def _print_guide():
+    console.print(GUIDE_TEXT)
+
+
+# table name -> CLI command that searches it
+TABLE_COMMANDS = {
+    "effects": "effect",
+    "triggers": "trigger",
+    "scopes": "scope",
+    "modifiers": "modifier",
+    "on_actions": "on-action",
+    "data_types": "promote",
+    "custom_localizations": "custom-loc",
+}
+
+
+def _handle_miss(query, table, db_path, label):
+    """On a failed lookup, print did-you-mean suggestions and cross-table
+    hits instead of the full search guide."""
+    console.print(f"[yellow]No {label} found matching '{query}'[/yellow]")
+
+    other = find_in_other_tables(query, table, db_path=db_path)
+    if other:
+        hints = ", ".join(
+            f"{t} (pdx-syntax {TABLE_COMMANDS[t]} {query} --exact)"
+            for t in other
+        )
+        console.print(f"[green]Exact name exists in:[/green] {hints}")
+
+    suggestions = suggest_similar(query, table, db_path=db_path)
+    if suggestions:
+        console.print("[bold]Did you mean:[/bold]")
+        for name, score in suggestions:
+            console.print(f"  - {name} [dim]({score})[/dim]")
+
+    console.print("[dim]More search strategies: pdx-syntax info[/dim]")
+
+
 @main.command()
 @click.pass_context
 def info(ctx):
-    """Show quick reference for EU5 scripting syntax lookup.
-
-    Run this to see common usage patterns and examples.
-    """
-    info_text = """
-[bold cyan]pdx-syntax - EU5 Script Syntax Reference[/bold cyan]
-
-[bold]Search Commands:[/bold]
-  effect <query>     Search effects (e.g., add_gold, create_character)
-  trigger <query>    Search triggers (e.g., has_variable, is_at_war)
-  scope <query>      Search scopes/iterators (e.g., every_country)
-  modifier <query>   Search modifiers (e.g., discipline, tax_modifier)
-  on-action <query>  Search on_actions (e.g., on_war_declared)
-
-[bold]Common Options:[/bold]
-  -s, --scope TYPE   Filter by scope (country, character, location, etc.)
-  -c, --category CAT Filter by category
-  -n, --limit N      Max results (default: 10)
-  --exact            Exact name match only
-
-[bold]Examples:[/bold]
-  pdx-syntax effect add_gold              # Find gold-related effects
-  pdx-syntax effect create -s country     # Country-scoped create effects
-  pdx-syntax trigger war                  # War-related triggers
-  pdx-syntax scope every_ --iterator      # All 'every_' iterators
-  pdx-syntax modifier discipline --exact  # Exact match for discipline
-  pdx-syntax template event_structure     # Show event template
-
-[bold]Iterator Patterns:[/bold]
-  any_<target>     Trigger iterator (checks if any match)
-  every_<target>   Effect iterator (applies to all)
-  random_<target>  Effect iterator (picks one random)
-  ordered_<target> Effect iterator (sorted order)
-
-[bold]Scope Types:[/bold]
-  none, country, character, location, area, region, war, unit,
-  building, market, trade, culture, religion, dynasty, pop, etc.
-
-[bold]Data Management:[/bold]
-  pdx-syntax stats                   # Show database counts
-  pdx-syntax update --comprehensive  # Full wiki scrape
-  pdx-syntax changes 1.1.0           # Version-specific changes
-  pdx-syntax templates               # List syntax templates
-"""
-    console.print(info_text)
+    """Show detailed search guide — what lives where and how to find it."""
+    _print_guide()
 
 
 @main.command()
@@ -119,15 +169,15 @@ def effect(ctx, query, scope, category, limit, exact):
     if exact:
         result = get_by_name(query, "effects", db_path)
         if result:
-            _display_effect_detail(result)
+            _display_effect_detail(result, db_path)
         else:
-            console.print(f"[yellow]No effect found with name '{query}'[/yellow]")
+            _handle_miss(query, "effects", db_path, "effect")
         return
 
     results = search_effects(query, scope=scope, category=category, limit=limit, db_path=db_path)
 
     if not results:
-        console.print(f"[yellow]No effects found matching '{query}'[/yellow]")
+        _handle_miss(query, "effects", db_path, "effect")
         return
 
     _display_results_table(results, "Effects", ["name", "scope_type", "category", "description"])
@@ -153,15 +203,15 @@ def trigger(ctx, query, scope, category, limit, exact):
     if exact:
         result = get_by_name(query, "triggers", db_path)
         if result:
-            _display_trigger_detail(result)
+            _display_trigger_detail(result, db_path)
         else:
-            console.print(f"[yellow]No trigger found with name '{query}'[/yellow]")
+            _handle_miss(query, "triggers", db_path, "trigger")
         return
 
     results = search_triggers(query, scope=scope, category=category, limit=limit, db_path=db_path)
 
     if not results:
-        console.print(f"[yellow]No triggers found matching '{query}'[/yellow]")
+        _handle_miss(query, "triggers", db_path, "trigger")
         return
 
     _display_results_table(results, "Triggers", ["name", "scope_type", "category", "description"])
@@ -187,9 +237,9 @@ def scope(ctx, query, scope_type, iterator, limit, exact):
     if exact:
         result = get_by_name(query, "scopes", db_path)
         if result:
-            _display_scope_detail(result)
+            _display_scope_detail(result, db_path)
         else:
-            console.print(f"[yellow]No scope found with name '{query}'[/yellow]")
+            _handle_miss(query, "scopes", db_path, "scope")
         return
 
     results = search_scopes(
@@ -197,7 +247,7 @@ def scope(ctx, query, scope_type, iterator, limit, exact):
     )
 
     if not results:
-        console.print(f"[yellow]No scopes found matching '{query}'[/yellow]")
+        _handle_miss(query, "scopes", db_path, "scope")
         return
 
     _display_results_table(
@@ -226,9 +276,9 @@ def modifier(ctx, query, category, scope_type, boolean, limit, exact):
     if exact:
         result = get_by_name(query, "modifiers", db_path)
         if result:
-            _display_modifier_detail(result)
+            _display_modifier_detail(result, db_path)
         else:
-            console.print(f"[yellow]No modifier found with name '{query}'[/yellow]")
+            _handle_miss(query, "modifiers", db_path, "modifier")
         return
 
     results = search_modifiers(
@@ -241,7 +291,7 @@ def modifier(ctx, query, category, scope_type, boolean, limit, exact):
     )
 
     if not results:
-        console.print(f"[yellow]No modifiers found matching '{query}'[/yellow]")
+        _handle_miss(query, "modifiers", db_path, "modifier")
         return
 
     _display_results_table(
@@ -268,18 +318,97 @@ def on_action(ctx, query, scope_type, limit, exact):
     if exact:
         result = get_by_name(query, "on_actions", db_path)
         if result:
-            _display_on_action_detail(result)
+            _display_on_action_detail(result, db_path)
         else:
-            console.print(f"[yellow]No on_action found with name '{query}'[/yellow]")
+            _handle_miss(query, "on_actions", db_path, "on_action")
         return
 
     results = search_on_actions(query, scope_type=scope_type, limit=limit, db_path=db_path)
 
     if not results:
-        console.print(f"[yellow]No on_actions found matching '{query}'[/yellow]")
+        _handle_miss(query, "on_actions", db_path, "on_action")
         return
 
     _display_results_table(results, "On Actions", ["name", "scope_type", "description"])
+
+
+@main.command()
+@click.argument("query")
+@click.option("-t", "--type", "parent_type", help="Filter by parent type (e.g., Country)")
+@click.option("-c", "--category", "source_category", help="Filter by source category (script, gui, common, uncategorized, internal_gui)")
+@click.option("-d", "--definition", "definition_type", help="Filter by definition type (e.g., Promote, Function, Type)")
+@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("--exact", is_flag=True, help="Exact name match only")
+@click.pass_context
+def promote(ctx, query, parent_type, source_category, definition_type, limit, exact):
+    """Search data types (promotes, functions, types).
+
+    Examples:
+        pdx-syntax promote GetCapital
+        pdx-syntax promote GetCapital --type Country
+        pdx-syntax promote Variable --category script
+        pdx-syntax promote MakeScope --definition Function
+    """
+    db_path = ctx.obj["db_path"]
+
+    if exact:
+        result = get_by_name(query, "data_types", db_path)
+        if result:
+            _display_data_type_detail(result, db_path)
+        else:
+            _handle_miss(query, "data_types", db_path, "data type")
+        return
+
+    results = search_data_types(
+        query,
+        parent_type=parent_type,
+        source_category=source_category,
+        definition_type=definition_type,
+        limit=limit,
+        db_path=db_path,
+    )
+
+    if not results:
+        _handle_miss(query, "data_types", db_path, "data type")
+        return
+
+    _display_results_table(
+        results, "Data Types", ["name", "definition_type", "return_type", "source_category", "description"]
+    )
+
+
+@main.command()
+@click.argument("query")
+@click.option("-s", "--scope", help="Filter by scope")
+@click.option("-e", "--entries", is_flag=True, help="Search within entry keys instead of names")
+@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("--exact", is_flag=True, help="Exact name match only")
+@click.pass_context
+def custom_loc(ctx, query, scope, entries, limit, exact):
+    """Search custom localization functions.
+
+    Examples:
+        pdx-syntax custom-loc rebel              # fuzzy match on name
+        pdx-syntax custom-loc grain --entries     # find locs containing 'grain' entry
+        pdx-syntax custom-loc country --scope country
+    """
+    db_path = ctx.obj["db_path"]
+
+    if exact:
+        result = get_by_name(query, "custom_localizations", db_path)
+        if result:
+            _display_custom_loc_detail(result, db_path)
+        else:
+            _handle_miss(query, "custom_localizations", db_path, "custom localization")
+        return
+
+    results = search_custom_localizations(query, scope=scope, search_entries=entries, limit=limit, db_path=db_path)
+
+    if not results:
+        _handle_miss(query, "custom_localizations", db_path, "custom localization")
+        return
+
+    _display_results_table(results, "Custom Localizations", ["name", "scope", "random_valid", "entries"])
 
 
 @main.command()
@@ -306,6 +435,7 @@ def search(ctx, query, item_type, limit):
 
     if not results:
         console.print(f"[yellow]No results found for '{query}' in {item_type}[/yellow]")
+        _print_guide()
         return
 
     # Determine columns based on type
@@ -406,50 +536,49 @@ def changes(ctx, version):
 
 
 @main.command()
-@click.option("--force", is_flag=True, help="Force update even if recently updated")
-@click.option("--comprehensive", is_flag=True, help="Do comprehensive scraping (slower but more complete)")
+@click.option("--docs-dir", type=click.Path(exists=True), help="Path to EU5 docs/ directory")
+@click.option("--data-types-dir", type=click.Path(exists=True), help="Path to EU5 logs/data_types/ directory")
+@click.option("--version", help="Game version label (auto-detected if omitted)")
+@click.option("--offline", is_flag=True, help="Use only built-in seed data (no file reading)")
 @click.pass_context
-def update(ctx, force, comprehensive):
-    """Update the database from wiki sources.
+def update(ctx, docs_dir, data_types_dir, version, offline):
+    """Update the database from game-dumped log files.
 
-    This fetches the latest data from the EU5 wiki and modding digests.
-    Rate limiting is applied to prevent excessive requests.
+    Reads the .log and data_types files that EU5 dumps to its user
+    directory.  By default looks in the standard Paradox location;
+    use --docs-dir / --data-types-dir to override.
 
-    Use --comprehensive for thorough scraping that extracts all available
-    effects, triggers, scopes, and modifiers from the wiki.
+    Use --offline to load only the built-in seed data.
     """
+    from pathlib import Path as _Path
+    from .scrapers.digest import digest_update, DEFAULT_DOCS_DIR, DEFAULT_DATA_TYPES_DIR
+
     db_path = ctx.obj["db_path"]
+    dd = _Path(docs_dir) if docs_dir else DEFAULT_DOCS_DIR
+    dtd = _Path(data_types_dir) if data_types_dir else DEFAULT_DATA_TYPES_DIR
 
-    if comprehensive:
-        from .scrapers.comprehensive import comprehensive_update
-
-        console.print("[bold]Starting comprehensive update (this may take a few minutes)...[/bold]")
-        try:
-            stats = comprehensive_update(db_path, verbose=True)
-            console.print("\n[green]Comprehensive update complete![/green]")
-            console.print(f"  Effects: {stats.get('effects', 0)}")
-            console.print(f"  Triggers: {stats.get('triggers', 0)}")
-            console.print(f"  Scopes: {stats.get('scopes', 0)}")
-            console.print(f"  Modifiers: {stats.get('modifiers', 0)}")
-            console.print(f"  On Actions: {stats.get('on_actions', 0)}")
-        except Exception as e:
-            console.print(f"[red]Update failed: {e}[/red]")
-            import traceback
-            traceback.print_exc()
-    else:
-        from .scrapers.wiki import update_from_wiki
-
-        with console.status("[bold green]Updating database from wiki sources..."):
-            try:
-                stats = update_from_wiki(db_path, force=force)
-                console.print("[green]Update complete![/green]")
-                console.print(f"  Effects: {stats.get('effects', 0)}")
-                console.print(f"  Triggers: {stats.get('triggers', 0)}")
-                console.print(f"  Scopes: {stats.get('scopes', 0)}")
-                console.print(f"  Modifiers: {stats.get('modifiers', 0)}")
-                console.print(f"  On Actions: {stats.get('on_actions', 0)}")
-            except Exception as e:
-                console.print(f"[red]Update failed: {e}[/red]")
+    console.print("[bold]Updating database from game files...[/bold]")
+    try:
+        stats = digest_update(
+            db_path,
+            docs_dir=dd,
+            data_types_dir=dtd,
+            game_version=version,
+            verbose=True,
+            offline=offline,
+        )
+        console.print("\n[green]Update complete![/green]")
+        console.print(f"  Effects: {stats.get('effects', 0)}")
+        console.print(f"  Triggers: {stats.get('triggers', 0)}")
+        console.print(f"  Scopes: {stats.get('scopes', 0)}")
+        console.print(f"  Modifiers: {stats.get('modifiers', 0)}")
+        console.print(f"  On Actions: {stats.get('on_actions', 0)}")
+        console.print(f"  Custom Localizations: {stats.get('custom_localizations', 0)}")
+        console.print(f"  Data Types: {stats.get('data_types', 0)}")
+    except Exception as e:
+        console.print(f"[red]Update failed: {e}[/red]")
+        import traceback
+        traceback.print_exc()
 
 
 @main.command()
@@ -567,24 +696,6 @@ def templates(ctx):
 
 @main.command()
 @click.pass_context
-def rate_limit(ctx):
-    """Show current rate limit status."""
-    from .scrapers.wiki import get_rate_limit_status
-
-    status = get_rate_limit_status()
-
-    console.print("\n[bold]Rate Limit Status:[/bold]")
-    for domain, info in status.items():
-        console.print(f"\n  [cyan]{domain}[/cyan]")
-        console.print(f"    Requests (last minute): {info['requests_last_minute']}/{info['limit_per_minute']}")
-        console.print(f"    Requests (last hour): {info['requests_last_hour']}/{info['limit_per_hour']}")
-        console.print(f"    Can request: {'Yes' if info['can_request'] else 'No'}")
-        if info['wait_time'] > 0:
-            console.print(f"    Wait time: {info['wait_time']:.1f}s")
-
-
-@main.command()
-@click.pass_context
 def stats(ctx):
     """Show database statistics."""
     from .database import get_connection
@@ -593,7 +704,8 @@ def stats(ctx):
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
-    tables = ["effects", "triggers", "scopes", "modifiers", "on_actions", "change_log"]
+    tables = ["effects", "triggers", "scopes", "modifiers", "on_actions",
+              "custom_localizations", "data_types", "change_log"]
 
     console.print("\n[bold]Database Statistics:[/bold]")
     for table in tables:
@@ -615,13 +727,104 @@ def stats(ctx):
     conn.close()
 
 
+VALID_NOTE_TYPES = ["effect", "trigger", "scope", "modifier", "on_action", "custom_loc", "data_type"]
+
+
+@main.command()
+@click.argument("action", type=click.Choice(["add", "list", "rm"]))
+@click.argument("args", nargs=-1)
+@click.pass_context
+def note(ctx, action, args):
+    """Add, list, or remove notes on entries.
+
+    \b
+    Add a note:
+        pdx-syntax note add effect add_gold "Accepts negative values"
+    List notes for an entry:
+        pdx-syntax note list effect add_gold
+    List all notes:
+        pdx-syntax note list
+    Remove a note by ID:
+        pdx-syntax note rm 3
+    """
+    db_path = ctx.obj["db_path"]
+
+    if action == "add":
+        if len(args) < 3:
+            console.print("[red]Usage: pdx-syntax note add <type> <name> <content>[/red]")
+            console.print(f"  Types: {', '.join(VALID_NOTE_TYPES)}")
+            return
+        item_type, item_name, content = args[0], args[1], " ".join(args[2:])
+        if item_type not in VALID_NOTE_TYPES:
+            console.print(f"[red]Invalid type '{item_type}'. Must be one of: {', '.join(VALID_NOTE_TYPES)}[/red]")
+            return
+        note_id = add_note(item_type, item_name, content, db_path=db_path)
+        console.print(f"[green]Note #{note_id} added to {item_type} '{item_name}'[/green]")
+
+    elif action == "list":
+        if len(args) >= 2:
+            item_type, item_name = args[0], args[1]
+            notes = get_notes(item_type, item_name, db_path=db_path)
+            if not notes:
+                console.print(f"[yellow]No notes for {item_type} '{item_name}'[/yellow]")
+                return
+            _display_notes(notes, f"{item_type}: {item_name}")
+        else:
+            notes = get_all_notes(db_path=db_path)
+            if not notes:
+                console.print("[yellow]No notes found[/yellow]")
+                return
+            _display_notes(notes, "All Notes")
+
+    elif action == "rm":
+        if not args:
+            console.print("[red]Usage: pdx-syntax note rm <note_id>[/red]")
+            return
+        try:
+            note_id = int(args[0])
+        except ValueError:
+            console.print("[red]Note ID must be a number[/red]")
+            return
+        if delete_note(note_id, db_path=db_path):
+            console.print(f"[green]Note #{note_id} deleted[/green]")
+        else:
+            console.print(f"[yellow]Note #{note_id} not found[/yellow]")
+
+
+def _display_notes(notes: list[dict], title: str) -> None:
+    """Display notes in a table."""
+    table = Table(title=title)
+    table.add_column("ID", style="dim")
+    table.add_column("Type", style="cyan")
+    table.add_column("Name", style="cyan")
+    table.add_column("Note")
+    table.add_column("Author", style="dim")
+
+    for n in notes:
+        table.add_row(
+            str(n["id"]),
+            n["item_type"],
+            n["item_name"],
+            n["content"],
+            n["author"],
+        )
+
+    console.print(table)
+
+
+def _get_entry_notes(item_type: str, name: str, db_path) -> list[dict]:
+    """Get notes for an entry, for use in detail displays."""
+    return get_notes(item_type, name, db_path=db_path)
+
+
 def _display_results_table(results: list[dict], title: str, columns: list[str]) -> None:
     """Display search results in a table."""
     table = Table(title=f"{title} ({len(results)} results)")
 
     for col in columns:
         style = "cyan" if col == "name" else None
-        table.add_column(col.replace("_", " ").title(), style=style)
+        no_wrap = col in ("name", "scope_type", "target_type", "category")
+        table.add_column(col.replace("_", " ").title(), style=style, no_wrap=no_wrap)
 
     for result in results:
         row = []
@@ -629,17 +832,27 @@ def _display_results_table(results: list[dict], title: str, columns: list[str]) 
             val = result.get(col, "")
             if val is None:
                 val = ""
-            elif isinstance(val, bool) or col == "is_iterator" or col == "is_boolean":
+            elif isinstance(val, bool) or col in ("is_iterator", "is_boolean", "random_valid"):
                 val = "Yes" if val else "No"
-            elif len(str(val)) > 50:
-                val = str(val)[:47] + "..."
+            else:
+                val = str(val)
             row.append(str(val))
         table.add_row(*row)
 
     console.print(table)
+    console.print("[dim]Tip: use `pdx-syntax note add <type> <name> \"<note>\"` to record findings.[/dim]")
 
 
-def _display_effect_detail(effect: dict) -> None:
+def _show_notes_section(item_type: str, name: str, db_path) -> None:
+    """Show notes for an entry if any exist."""
+    notes = get_notes(item_type, name, db_path=db_path)
+    if notes:
+        console.print(f"\n[bold yellow]Notes ({len(notes)}):[/bold yellow]")
+        for n in notes:
+            console.print(f"  [dim]#{n['id']}[/dim] {n['content']}  [dim]({n['author']})[/dim]")
+
+
+def _display_effect_detail(effect: dict, db_path=None) -> None:
     """Display detailed information about an effect."""
     console.print(Panel(f"[bold cyan]{effect['name']}[/bold cyan]", title="Effect"))
 
@@ -663,8 +876,11 @@ def _display_effect_detail(effect: dict) -> None:
         console.print("\n[bold]Example:[/bold]")
         console.print(Syntax(effect["example"], "text", theme="monokai"))
 
+    if db_path:
+        _show_notes_section("effect", effect["name"], db_path)
 
-def _display_trigger_detail(trigger: dict) -> None:
+
+def _display_trigger_detail(trigger: dict, db_path=None) -> None:
     """Display detailed information about a trigger."""
     console.print(Panel(f"[bold cyan]{trigger['name']}[/bold cyan]", title="Trigger"))
 
@@ -688,8 +904,11 @@ def _display_trigger_detail(trigger: dict) -> None:
         console.print("\n[bold]Example:[/bold]")
         console.print(Syntax(trigger["example"], "text", theme="monokai"))
 
+    if db_path:
+        _show_notes_section("trigger", trigger["name"], db_path)
 
-def _display_scope_detail(scope: dict) -> None:
+
+def _display_scope_detail(scope: dict, db_path=None) -> None:
     """Display detailed information about a scope."""
     console.print(Panel(f"[bold cyan]{scope['name']}[/bold cyan]", title="Scope"))
 
@@ -714,8 +933,15 @@ def _display_scope_detail(scope: dict) -> None:
     if scope.get("parameters"):
         console.print(f"\n[bold]Parameters:[/bold] {scope['parameters']}")
 
+    if scope.get("example"):
+        console.print("\n[bold]Example:[/bold]")
+        console.print(Syntax(scope["example"], "text", theme="monokai"))
 
-def _display_modifier_detail(modifier: dict) -> None:
+    if db_path:
+        _show_notes_section("scope", scope["name"], db_path)
+
+
+def _display_modifier_detail(modifier: dict, db_path=None) -> None:
     """Display detailed information about a modifier."""
     console.print(Panel(f"[bold cyan]{modifier['name']}[/bold cyan]", title="Modifier"))
 
@@ -743,8 +969,18 @@ def _display_modifier_detail(modifier: dict) -> None:
     if modifier.get("percent"):
         console.print(f"[bold]Percent:[/bold] Yes")
 
+    if modifier.get("syntax"):
+        console.print("\n[bold]Syntax:[/bold]")
+        console.print(Syntax(modifier["syntax"], "text", theme="monokai"))
 
-def _display_on_action_detail(on_action: dict) -> None:
+    if modifier.get("parameters"):
+        console.print(f"\n[bold]Parameters:[/bold] {modifier['parameters']}")
+
+    if db_path:
+        _show_notes_section("modifier", modifier["name"], db_path)
+
+
+def _display_on_action_detail(on_action: dict, db_path=None) -> None:
     """Display detailed information about an on_action."""
     console.print(Panel(f"[bold cyan]{on_action['name']}[/bold cyan]", title="On Action"))
 
@@ -757,12 +993,66 @@ def _display_on_action_detail(on_action: dict) -> None:
     if on_action.get("category"):
         console.print(f"[bold]Category:[/bold] {on_action['category']}")
 
+    if on_action.get("syntax"):
+        console.print("\n[bold]Syntax:[/bold]")
+        console.print(Syntax(on_action["syntax"], "text", theme="monokai"))
+
     if on_action.get("parameters"):
         console.print(f"\n[bold]Parameters:[/bold] {on_action['parameters']}")
 
     if on_action.get("example"):
         console.print("\n[bold]Example:[/bold]")
         console.print(Syntax(on_action["example"], "text", theme="monokai"))
+
+    if db_path:
+        _show_notes_section("on_action", on_action["name"], db_path)
+
+
+def _display_data_type_detail(dt: dict, db_path=None) -> None:
+    """Display detailed information about a data type."""
+    console.print(Panel(f"[bold cyan]{dt['name']}[/bold cyan]", title="Data Type"))
+
+    if dt.get("description"):
+        console.print(f"\n[bold]Description:[/bold] {dt['description']}")
+
+    if dt.get("parent_type"):
+        console.print(f"[bold]Parent Type:[/bold] {dt['parent_type']}")
+
+    if dt.get("args"):
+        console.print(f"[bold]Arguments:[/bold] {dt['args']}")
+
+    if dt.get("definition_type"):
+        console.print(f"[bold]Definition:[/bold] {dt['definition_type']}")
+
+    if dt.get("return_type"):
+        console.print(f"[bold]Return Type:[/bold] {dt['return_type']}")
+
+    if dt.get("source_category"):
+        console.print(f"[bold]Category:[/bold] {dt['source_category']}")
+
+    if db_path:
+        _show_notes_section("data_type", dt["name"], db_path)
+
+
+def _display_custom_loc_detail(cl: dict, db_path=None) -> None:
+    """Display detailed information about a custom localization."""
+    console.print(Panel(f"[bold cyan]{cl['name']}[/bold cyan]", title="Custom Localization"))
+
+    if cl.get("scope"):
+        console.print(f"\n[bold]Scope:[/bold] {cl['scope']}")
+
+    console.print(f"[bold]Random Valid:[/bold] {'Yes' if cl.get('random_valid') else 'No'}")
+
+    if cl.get("entries"):
+        console.print(f"\n[bold]Entries:[/bold]")
+        for entry in cl["entries"].split("\n")[:20]:
+            console.print(f"  {entry}")
+        lines = cl["entries"].split("\n")
+        if len(lines) > 20:
+            console.print(f"  ... and {len(lines) - 20} more")
+
+    if db_path:
+        _show_notes_section("custom_loc", cl["name"], db_path)
 
 
 if __name__ == "__main__":
