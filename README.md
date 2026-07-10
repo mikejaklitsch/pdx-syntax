@@ -54,8 +54,8 @@ Force either mode with `--plain` or `--table` (global options, e.g. `pdx-syntax 
 The database is built from files the game itself dumps. When EU5 patches:
 
 1. Launch the game with `-debug_mode` and open the console.
-2. Run the docs dump (`script_docs`) — writes `docs/*.log` (effects, triggers, modifiers, on_actions, event_targets, custom_localization) to the Paradox user directory.
-3. Run the data-types dump (`DumpDataTypes`; check console autocomplete if the name differs in your version) — writes `logs/data_types/`.
+2. Run the docs dump (`script_docs`). It writes `docs/*.log` (effects, triggers, modifiers, on_actions, event_targets, custom_localization) to the Paradox user directory.
+3. Run the data-types dump (`DumpDataTypes`; check console autocomplete if the name differs in your version). It writes `logs/data_types/`.
 4. Run:
 
 ```bash
