@@ -1,6 +1,6 @@
 # pdx-syntax
 
-CLI tool for querying Europa Universalis 5 script syntax. EU5 launched after most LLMs were trained, so AI coding assistants have no knowledge of the game's scripting language. This tool provides a queryable SQLite knowledge base seeded from scraped game data, so LLMs can look up correct syntax instead of hallucinating it. Search uses rapidfuzz for fuzzy matching and SQLite FTS5 for full-text queries across effects, triggers, scopes, modifiers, on-actions, data types, and custom localization functions.
+CLI tool for querying Europa Universalis 5 script syntax. EU5 launched after most LLMs were trained, so AI coding assistants have no knowledge of the game's scripting language. This tool provides a queryable SQLite knowledge base built from the game's own documentation dumps, so LLMs (and humans) can look up correct syntax instead of hallucinating it. Search uses rapidfuzz for fuzzy matching and SQLite FTS5 for full-text queries across effects, triggers, scopes, modifiers, on-actions, data types, and custom localization functions.
 
 ## Scope & Purpose
 
@@ -8,173 +8,110 @@ CLI tool for querying Europa Universalis 5 script syntax. EU5 launched after mos
 - Quick lookups of EU5 script syntax elements by name
 - Fuzzy search with filtering by scope type, category
 - Display syntax patterns, parameters, usage examples
-- Track version changes (added/deprecated items)
+- Did-you-mean suggestions and cross-table hints on misses
+- Warn when the game has patched and the database is stale
 
 **What this tool does NOT do:**
 - Syntax validation or linting of your script files
 - Code generation or scaffolding
-- Parsing live game files for data extraction
 - IDE/editor integration
 
 ## Installation
 
 ```bash
+pipx install git+https://github.com/mikejaklitsch/pdx-syntax
+# or from a clone:
 pip install -e .
 ```
+
+The repo ships with a fully built database (`src/pdx_syntax/data/eu5_syntax.db`), so searches work immediately after install. Rebuild it yourself only when the game patches (see Updating below).
 
 ## Quick Start
 
 ```bash
-# Initialize and seed the database
-pdx-syntax init
-pdx-syntax seed
-
-# Search for effects
 pdx-syntax effect add_gold
-pdx-syntax effect "create character" --scope country
-
-# Search for triggers
-pdx-syntax trigger has_variable
 pdx-syntax trigger "is at war"
-
-# Search for scopes/iterators
-pdx-syntax scope every_country
 pdx-syntax scope army --iterator
-
-# Search for modifiers
 pdx-syntax modifier discipline
-pdx-syntax modifier tax --category economic
-
-# Search for on_actions
-pdx-syntax on_action death
 pdx-syntax on_action monthly
-
-# View syntax templates
-pdx-syntax templates
-pdx-syntax template event_structure
-
-# View version changes
-pdx-syntax changes 1.1.0
+pdx-syntax promote GetCapital --type Country
+pdx-syntax custom-loc grain --entries
+pdx-syntax search "army morale" --type modifiers
+pdx-syntax info          # full search guide: what lives where
 ```
+
+## Output Modes
+
+Two renderers, chosen automatically:
+
+- **Terminal:** rich tables. Cells fold-wrap; nothing is ever truncated. If the terminal is too narrow to give every column readable width, the command falls back to flat text on its own.
+- **Piped / non-TTY** (agents, scripts, `| less`): flat text blocks with full descriptions. No table layout, no column squeezing, no data loss.
+
+Force either mode with `--plain` or `--table` (global options, e.g. `pdx-syntax --plain effect add_gold`).
+
+## Updating After a Game Patch
+
+The database is built from files the game itself dumps. When EU5 patches:
+
+1. Launch the game with `-debug_mode` and open the console.
+2. Run the docs dump (`script_docs`) — writes `docs/*.log` (effects, triggers, modifiers, on_actions, event_targets, custom_localization) to the Paradox user directory.
+3. Run the data-types dump (`DumpDataTypes`; check console autocomplete if the name differs in your version) — writes `logs/data_types/`.
+4. Run:
+
+```bash
+pdx-syntax update
+```
+
+`update` auto-detects the game version, warns if the dumps predate the current game install, and records the game's patch checksum. Afterwards every `pdx-syntax` invocation compares that stored checksum against the live install and prints a warning to stderr the moment the game patches ahead of the database.
+
+Paths default to the author's machine; override with environment variables:
+
+| Variable | Meaning | Default |
+|----------|---------|---------|
+| `PDX_USER_DIR` | Paradox user dir (contains `docs/`, `logs/`) | `~/Documents/Paradox Interactive/Europa Universalis V` (WSL path) |
+| `PDX_GAME_ROOT` | Game install root (for `binaries/checksum.txt`) | Steam library install |
+
+Or pass `--docs-dir` / `--data-types-dir` to `update` directly.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `init` | Initialize the database |
-| `seed` | Seed with built-in EU5 syntax data |
-| `update` | Fetch latest data from EU5 wiki |
 | `effect <query>` | Search effects |
 | `trigger <query>` | Search triggers |
 | `scope <query>` | Search scopes/iterators |
 | `modifier <query>` | Search modifiers |
 | `on_action <query>` | Search on_actions |
+| `promote <query>` | Search data types (promotes, functions) |
+| `custom-loc <query>` | Search custom localization functions |
 | `search <query>` | Full-text search |
-| `template <name>` | Show syntax template |
-| `templates` | List all templates |
-| `categories` | List categories |
-| `scopes` | List scope types |
+| `note add\|list\|rm` | Attach findings to entries |
+| `template <name>` / `templates` | Syntax templates |
+| `categories` / `scopes` | List filter values |
 | `changes <version>` | Show version changes |
-| `stats` | Show database statistics |
-| `rate_limit` | Show rate limit status |
+| `stats` | Database statistics |
+| `update` | Rebuild DB from game dumps |
+| `seed` | Load built-in fallback data only |
+| `init` | Initialize an empty database |
 
 ## Search Options
 
 All search commands support:
 
 - `-n, --limit N` - Maximum results (default: 10)
-- `--exact` - Exact name match only
+- `--exact` - Exact name match with full detail view
 
-Effect/Trigger specific:
-- `-s, --scope TYPE` - Filter by scope type
-- `-c, --category CAT` - Filter by category
-
-Scope specific:
-- `-t, --type TYPE` - Filter by scope type
-- `--iterator` - Show only iterators
-
-Modifier specific:
-- `-c, --category CAT` - Filter by category
-- `-s, --scope TYPE` - Filter by scope type
-- `--boolean` - Show only boolean modifiers
-
-## Output Fields
-
-Search results include these fields when available:
-
-| Field | Description |
-|-------|-------------|
-| `name` | The script keyword (e.g., `add_gold`, `any_country`) |
-| `description` | What the item does |
-| `syntax` | Usage pattern (e.g., `add_gold = <amount>`) |
-| `parameters` | Expected parameter types/values |
-| `example` | Code example showing typical usage |
-| `scope_type` | Required scope context (country, character, etc.) |
-| `category` | Functional grouping (economy, military, flow, etc.) |
-
-## Data Quality Notes
-
-The seed data is manually curated from the EU5 wiki and modding digests. Coverage varies:
-
-- **Flow triggers & effects:** Good syntax/parameter coverage, some examples
-- **Modifiers:** Name and category complete, syntax added for common ones
-- **On_actions:** Basic structure documented, parameter scopes listed
-- **Iterators:** Syntax patterns complete, parameters documented
-
-If you find missing or incorrect data, contributions are welcome.
-
-## Data Sources
-
-Data is sourced from:
-
-- [EU5 Wiki](https://eu5.paradoxwikis.com/) - Effects, triggers, scopes, modifiers
-- [Modding Digests](https://github.com/Europa-Universalis-5-Modding-Co-op/modding-digests) - Version changes
-
-## Contributing Data
-
-To improve the seed data:
-
-1. Edit `src/pdx_syntax/data/initial_data.py`
-2. Add/update entries with:
-   - `syntax`: The usage pattern
-   - `parameters`: Expected values/types
-   - `example`: Working code snippet
-3. Run `pdx-syntax seed --force` to reload
-4. Submit a PR
-
-## Rate Limiting
-
-The tool includes built-in rate limiting to prevent excessive requests:
-
-- 10 requests per minute per domain
-- 100 requests per hour per domain
-
-Use `pdx-syntax rate_limit` to check current status.
+Effect/Trigger: `-s/--scope`, `-c/--category`. Scope: `-t/--type`, `--iterator`. Modifier: `-c/--category`, `-s/--scope`, `--boolean`. Promote: `-t/--type`, `-c/--category`, `-d/--definition`. Custom-loc: `-s/--scope`, `-e/--entries`.
 
 ## Database Location
 
-Default: `~/.local/share/pdx-syntax/eu5_syntax.db`
-
-Override with `--db /path/to/database.db`
-
-## Version Tracking
-
-The database tracks changes across EU5 versions. Use `pdx-syntax changes <version>` to see what changed in a specific version.
-
-Tracked versions: 1.0.0, 1.0.2, 1.0.3, 1.0.4, 1.0.5, 1.0.7, 1.0.8, 1.0.9, 1.0.10, 1.1.0
+Default: `src/pdx_syntax/data/eu5_syntax.db` inside the installed package (shipped pre-built). Override with `--db /path/to/database.db`.
 
 ## Development
 
 ```bash
-# Install with dev dependencies
 pip install -e ".[dev]"
-
-# Run tests
 pytest
-
-# Format code
-black src tests
-ruff check src tests
 ```
 
 ## License

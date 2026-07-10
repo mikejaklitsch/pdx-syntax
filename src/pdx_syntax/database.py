@@ -44,6 +44,14 @@ def init_database(db_path: Optional[Path] = None) -> None:
         )
     """)
 
+    # Free-form key/value metadata (game checksum at update time, etc.)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
     # Game versions for tracking changes
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS game_versions (
@@ -394,5 +402,29 @@ def rebuild_fts_indexes(db_path: Optional[Path] = None) -> None:
         SELECT id, name, description, definition_type, return_type FROM data_types
     """)
 
+    conn.commit()
+    conn.close()
+
+
+def get_meta(key: str, db_path: Optional[Path] = None) -> Optional[str]:
+    """Read a meta key; None if missing or the table doesn't exist yet."""
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+
+def set_meta(key: str, value: str, db_path: Optional[Path] = None) -> None:
+    """Write a meta key (upsert)."""
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
     conn.commit()
     conn.close()

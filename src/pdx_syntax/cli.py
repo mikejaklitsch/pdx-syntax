@@ -1,13 +1,16 @@
 """CLI for querying EU5 syntax database."""
 
+import sys
+
 import click
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.markup import escape as _esc
 
-from .database import init_database, DEFAULT_DB_PATH
+from .database import init_database, get_meta, DEFAULT_DB_PATH
 from .search import (
     search_effects,
     search_triggers,
@@ -30,21 +33,48 @@ from .search import (
 )
 
 console = Console()
+_err_console = Console(stderr=True)
+
+# Plain output: full data as flat text, no table layout. Auto-enabled when
+# stdout is not a terminal (pipes, agents, redirects) so column squeezing
+# can never mangle results; --plain/--table force it either way.
+_PLAIN = not sys.stdout.isatty()
 
 
 @click.group(context_settings={"token_normalize_func": lambda x: x.replace("_", "-")})
 @click.option("--db", type=click.Path(), help="Database file path")
+@click.option("--plain/--table", "plain", default=None,
+              help="Force flat text / rich table output (default: tables on a "
+                   "terminal, flat text when piped)")
 @click.pass_context
-def main(ctx, db):
+def main(ctx, db, plain):
     """PDX Syntax - Query EU5 Paradox script syntax.
 
     Use fuzzy search to find effects, triggers, scopes, and modifiers
     for Europa Universalis 5 modding.
     """
+    global _PLAIN
+    if plain is not None:
+        _PLAIN = plain
     ctx.ensure_object(dict)
     db_path = Path(db) if db else DEFAULT_DB_PATH
     ctx.obj["db_path"] = db_path
     init_database(db_path)
+    _warn_if_stale(db_path)
+
+
+def _warn_if_stale(db_path):
+    """Warn (stderr) when the game has patched since the DB was built."""
+    from .scrapers.digest import read_game_checksum
+    stored = get_meta("game_checksum_at_update", db_path)
+    if not stored:
+        return
+    live = read_game_checksum()
+    if live and live != stored:
+        _err_console.print(
+            "[yellow]WARNING: the game has patched since this syntax DB was "
+            "built (checksum mismatch). Re-dump script docs from the in-game "
+            "console, then run 'pdx-syntax update'.[/yellow]")
 
 
 @main.command()
@@ -518,21 +548,17 @@ def changes(ctx, version):
         console.print(f"[yellow]No changes recorded for version {version}[/yellow]")
         return
 
-    table = Table(title=f"Changes in {version}")
-    table.add_column("Type", style="cyan")
-    table.add_column("Change", style="yellow")
-    table.add_column("Item", style="green")
-    table.add_column("Description")
-
-    for change in change_list:
-        table.add_row(
-            change["item_type"],
-            change["change_type"],
-            change["item_name"],
-            change.get("description", ""),
-        )
-
-    console.print(table)
+    rows = [
+        {
+            "name": c["item_name"],
+            "item_type": c["item_type"],
+            "change_type": c["change_type"],
+            "description": c.get("description", ""),
+        }
+        for c in change_list
+    ]
+    _display_results_table(rows, f"Changes in {version}",
+                           ["name", "item_type", "change_type", "description"])
 
 
 @main.command()
@@ -652,17 +678,17 @@ def template(ctx, name):
     console.print(Panel(f"[bold cyan]{template_data['name']}[/bold cyan]", title="Template"))
 
     if template_data.get("description"):
-        console.print(f"\n[bold]Description:[/bold] {template_data['description']}")
+        console.print(f"\n[bold]Description:[/bold] {_esc(str(template_data['description']))}")
 
     if template_data.get("category"):
-        console.print(f"[bold]Category:[/bold] {template_data['category']}")
+        console.print(f"[bold]Category:[/bold] {_esc(str(template_data['category']))}")
 
     if template_data.get("template"):
         console.print("\n[bold]Template:[/bold]")
         console.print(Syntax(template_data["template"], "text", theme="monokai"))
 
     if template_data.get("parameters"):
-        console.print(f"\n[bold]Parameters:[/bold] {template_data['parameters']}")
+        console.print(f"\n[bold]Parameters:[/bold] {_esc(str(template_data['parameters']))}")
 
 
 @main.command()
@@ -683,15 +709,9 @@ def templates(ctx):
         console.print("[yellow]No templates found. Run 'pdx-syntax seed' first.[/yellow]")
         return
 
-    table = Table(title="Syntax Templates")
-    table.add_column("Name", style="cyan")
-    table.add_column("Category")
-    table.add_column("Description")
-
-    for row in rows:
-        table.add_row(row["name"], row["category"] or "", (row["description"] or "")[:50])
-
-    console.print(table)
+    _display_results_table(
+        [dict(r) for r in rows], "Syntax Templates", ["name", "category", "description"]
+    )
 
 
 @main.command()
@@ -792,12 +812,21 @@ def note(ctx, action, args):
 
 
 def _display_notes(notes: list[dict], title: str) -> None:
-    """Display notes in a table."""
+    """Display notes."""
+    if _PLAIN:
+        print(title)
+        for n in notes:
+            print(f"\n#{n['id']} [{n['item_type']} {n['item_name']}] ({n['author']})")
+            for line in str(n["content"]).splitlines():
+                print(f"    {line.rstrip()}")
+        print()
+        return
+
     table = Table(title=title)
     table.add_column("ID", style="dim")
     table.add_column("Type", style="cyan")
-    table.add_column("Name", style="cyan")
-    table.add_column("Note")
+    table.add_column("Name", style="cyan", no_wrap=True)
+    table.add_column("Note", overflow="fold", ratio=3)
     table.add_column("Author", style="dim")
 
     for n in notes:
@@ -817,27 +846,70 @@ def _get_entry_notes(item_type: str, name: str, db_path) -> list[dict]:
     return get_notes(item_type, name, db_path=db_path)
 
 
-def _display_results_table(results: list[dict], title: str, columns: list[str]) -> None:
-    """Display search results in a table."""
-    table = Table(title=f"{title} ({len(results)} results)")
+# Columns rendered as an indented body under the entry instead of inline
+_BODY_COLUMNS = ("description", "entries")
 
+
+def _fmt_val(val, col: str) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, bool) or col in ("is_iterator", "is_boolean", "random_valid"):
+        return "Yes" if val else "No"
+    return str(val)
+
+
+def _display_results_table(results: list[dict], title: str, columns: list[str]) -> None:
+    """Display search results.
+
+    Plain mode (default when piped): one flat block per result, full text,
+    nothing squeezed or wrapped away. Table mode (terminals): rich table with
+    fold overflow so cells wrap but are never truncated.
+    """
+    # Even in table mode, fall back to plain when the terminal cannot give
+    # every column readable width (long names + narrow terminal would
+    # otherwise wrap cells down to a few characters per line).
+    use_plain = _PLAIN
+    if not use_plain and results:
+        name_width = max(len(str(r.get("name", ""))) for r in results)
+        tag_cols = [c for c in columns if c != "name" and c not in _BODY_COLUMNS]
+        needed = name_width + 12 * len(tag_cols) + 30 + 3 * len(columns) + 4
+        use_plain = console.width < needed
+
+    if use_plain:
+        print(f"{title} ({len(results)} results)")
+        body_cols = [c for c in _BODY_COLUMNS if c in columns]
+        for result in results:
+            tags = " | ".join(
+                f"{col}: {_fmt_val(result.get(col), col)}"
+                for col in columns
+                if col != "name" and col not in body_cols
+                and _fmt_val(result.get(col), col) != ""
+            )
+            name = _fmt_val(result.get("name"), "name")
+            print(f"\n{name}" + (f"  [{tags}]" if tags else ""))
+            for col in body_cols:
+                text = _fmt_val(result.get(col), col)
+                for line in text.splitlines():
+                    if line.strip():
+                        print(f"    {line.rstrip()}")
+        print()
+        return
+
+    table = Table(title=f"{title} ({len(results)} results)")
     for col in columns:
         style = "cyan" if col == "name" else None
-        no_wrap = col in ("name", "scope_type", "target_type", "category")
-        table.add_column(col.replace("_", " ").title(), style=style, no_wrap=no_wrap)
+        # Only the name column resists wrapping; every column folds instead
+        # of truncating, and body columns get the spare width.
+        table.add_column(
+            col.replace("_", " ").title(),
+            style=style,
+            no_wrap=(col == "name"),
+            overflow="fold",
+            ratio=(3 if col in _BODY_COLUMNS else None),
+        )
 
     for result in results:
-        row = []
-        for col in columns:
-            val = result.get(col, "")
-            if val is None:
-                val = ""
-            elif isinstance(val, bool) or col in ("is_iterator", "is_boolean", "random_valid"):
-                val = "Yes" if val else "No"
-            else:
-                val = str(val)
-            row.append(str(val))
-        table.add_row(*row)
+        table.add_row(*[_fmt_val(result.get(col, ""), col) for col in columns])
 
     console.print(table)
     console.print("[dim]Tip: use `pdx-syntax note add <type> <name> \"<note>\"` to record findings.[/dim]")
@@ -857,20 +929,20 @@ def _display_effect_detail(effect: dict, db_path=None) -> None:
     console.print(Panel(f"[bold cyan]{effect['name']}[/bold cyan]", title="Effect"))
 
     if effect.get("description"):
-        console.print(f"\n[bold]Description:[/bold] {effect['description']}")
+        console.print(f"\n[bold]Description:[/bold] {_esc(str(effect['description']))}")
 
     if effect.get("scope_type"):
-        console.print(f"[bold]Scope:[/bold] {effect['scope_type']}")
+        console.print(f"[bold]Scope:[/bold] {_esc(str(effect['scope_type']))}")
 
     if effect.get("category"):
-        console.print(f"[bold]Category:[/bold] {effect['category']}")
+        console.print(f"[bold]Category:[/bold] {_esc(str(effect['category']))}")
 
     if effect.get("syntax"):
         console.print("\n[bold]Syntax:[/bold]")
         console.print(Syntax(effect["syntax"], "text", theme="monokai"))
 
     if effect.get("parameters"):
-        console.print(f"\n[bold]Parameters:[/bold] {effect['parameters']}")
+        console.print(f"\n[bold]Parameters:[/bold] {_esc(str(effect['parameters']))}")
 
     if effect.get("example"):
         console.print("\n[bold]Example:[/bold]")
@@ -885,20 +957,20 @@ def _display_trigger_detail(trigger: dict, db_path=None) -> None:
     console.print(Panel(f"[bold cyan]{trigger['name']}[/bold cyan]", title="Trigger"))
 
     if trigger.get("description"):
-        console.print(f"\n[bold]Description:[/bold] {trigger['description']}")
+        console.print(f"\n[bold]Description:[/bold] {_esc(str(trigger['description']))}")
 
     if trigger.get("scope_type"):
-        console.print(f"[bold]Scope:[/bold] {trigger['scope_type']}")
+        console.print(f"[bold]Scope:[/bold] {_esc(str(trigger['scope_type']))}")
 
     if trigger.get("category"):
-        console.print(f"[bold]Category:[/bold] {trigger['category']}")
+        console.print(f"[bold]Category:[/bold] {_esc(str(trigger['category']))}")
 
     if trigger.get("syntax"):
         console.print("\n[bold]Syntax:[/bold]")
         console.print(Syntax(trigger["syntax"], "text", theme="monokai"))
 
     if trigger.get("parameters"):
-        console.print(f"\n[bold]Parameters:[/bold] {trigger['parameters']}")
+        console.print(f"\n[bold]Parameters:[/bold] {_esc(str(trigger['parameters']))}")
 
     if trigger.get("example"):
         console.print("\n[bold]Example:[/bold]")
@@ -913,25 +985,25 @@ def _display_scope_detail(scope: dict, db_path=None) -> None:
     console.print(Panel(f"[bold cyan]{scope['name']}[/bold cyan]", title="Scope"))
 
     if scope.get("description"):
-        console.print(f"\n[bold]Description:[/bold] {scope['description']}")
+        console.print(f"\n[bold]Description:[/bold] {_esc(str(scope['description']))}")
 
     if scope.get("scope_type"):
-        console.print(f"[bold]From Scope:[/bold] {scope['scope_type']}")
+        console.print(f"[bold]From Scope:[/bold] {_esc(str(scope['scope_type']))}")
 
     if scope.get("target_type"):
-        console.print(f"[bold]Target Type:[/bold] {scope['target_type']}")
+        console.print(f"[bold]Target Type:[/bold] {_esc(str(scope['target_type']))}")
 
     if scope.get("is_iterator"):
         console.print(f"[bold]Iterator:[/bold] Yes")
         if scope.get("iterator_type"):
-            console.print(f"[bold]Iterator Type:[/bold] {scope['iterator_type']}")
+            console.print(f"[bold]Iterator Type:[/bold] {_esc(str(scope['iterator_type']))}")
 
     if scope.get("syntax"):
         console.print("\n[bold]Syntax:[/bold]")
         console.print(Syntax(scope["syntax"], "text", theme="monokai"))
 
     if scope.get("parameters"):
-        console.print(f"\n[bold]Parameters:[/bold] {scope['parameters']}")
+        console.print(f"\n[bold]Parameters:[/bold] {_esc(str(scope['parameters']))}")
 
     if scope.get("example"):
         console.print("\n[bold]Example:[/bold]")
@@ -946,25 +1018,25 @@ def _display_modifier_detail(modifier: dict, db_path=None) -> None:
     console.print(Panel(f"[bold cyan]{modifier['name']}[/bold cyan]", title="Modifier"))
 
     if modifier.get("description"):
-        console.print(f"\n[bold]Description:[/bold] {modifier['description']}")
+        console.print(f"\n[bold]Description:[/bold] {_esc(str(modifier['description']))}")
 
     if modifier.get("category"):
-        console.print(f"[bold]Category:[/bold] {modifier['category']}")
+        console.print(f"[bold]Category:[/bold] {_esc(str(modifier['category']))}")
 
     if modifier.get("scope_type"):
-        console.print(f"[bold]Scope:[/bold] {modifier['scope_type']}")
+        console.print(f"[bold]Scope:[/bold] {_esc(str(modifier['scope_type']))}")
 
     if modifier.get("modifier_type"):
-        console.print(f"[bold]Type:[/bold] {modifier['modifier_type']}")
+        console.print(f"[bold]Type:[/bold] {_esc(str(modifier['modifier_type']))}")
 
     if modifier.get("is_boolean"):
         console.print(f"[bold]Boolean:[/bold] Yes")
 
     if modifier.get("default_value"):
-        console.print(f"[bold]Default:[/bold] {modifier['default_value']}")
+        console.print(f"[bold]Default:[/bold] {_esc(str(modifier['default_value']))}")
 
     if modifier.get("color"):
-        console.print(f"[bold]Color:[/bold] {modifier['color']}")
+        console.print(f"[bold]Color:[/bold] {_esc(str(modifier['color']))}")
 
     if modifier.get("percent"):
         console.print(f"[bold]Percent:[/bold] Yes")
@@ -974,7 +1046,7 @@ def _display_modifier_detail(modifier: dict, db_path=None) -> None:
         console.print(Syntax(modifier["syntax"], "text", theme="monokai"))
 
     if modifier.get("parameters"):
-        console.print(f"\n[bold]Parameters:[/bold] {modifier['parameters']}")
+        console.print(f"\n[bold]Parameters:[/bold] {_esc(str(modifier['parameters']))}")
 
     if db_path:
         _show_notes_section("modifier", modifier["name"], db_path)
@@ -985,20 +1057,20 @@ def _display_on_action_detail(on_action: dict, db_path=None) -> None:
     console.print(Panel(f"[bold cyan]{on_action['name']}[/bold cyan]", title="On Action"))
 
     if on_action.get("description"):
-        console.print(f"\n[bold]Description:[/bold] {on_action['description']}")
+        console.print(f"\n[bold]Description:[/bold] {_esc(str(on_action['description']))}")
 
     if on_action.get("scope_type"):
-        console.print(f"[bold]Scope:[/bold] {on_action['scope_type']}")
+        console.print(f"[bold]Scope:[/bold] {_esc(str(on_action['scope_type']))}")
 
     if on_action.get("category"):
-        console.print(f"[bold]Category:[/bold] {on_action['category']}")
+        console.print(f"[bold]Category:[/bold] {_esc(str(on_action['category']))}")
 
     if on_action.get("syntax"):
         console.print("\n[bold]Syntax:[/bold]")
         console.print(Syntax(on_action["syntax"], "text", theme="monokai"))
 
     if on_action.get("parameters"):
-        console.print(f"\n[bold]Parameters:[/bold] {on_action['parameters']}")
+        console.print(f"\n[bold]Parameters:[/bold] {_esc(str(on_action['parameters']))}")
 
     if on_action.get("example"):
         console.print("\n[bold]Example:[/bold]")
@@ -1013,22 +1085,22 @@ def _display_data_type_detail(dt: dict, db_path=None) -> None:
     console.print(Panel(f"[bold cyan]{dt['name']}[/bold cyan]", title="Data Type"))
 
     if dt.get("description"):
-        console.print(f"\n[bold]Description:[/bold] {dt['description']}")
+        console.print(f"\n[bold]Description:[/bold] {_esc(str(dt['description']))}")
 
     if dt.get("parent_type"):
-        console.print(f"[bold]Parent Type:[/bold] {dt['parent_type']}")
+        console.print(f"[bold]Parent Type:[/bold] {_esc(str(dt['parent_type']))}")
 
     if dt.get("args"):
-        console.print(f"[bold]Arguments:[/bold] {dt['args']}")
+        console.print(f"[bold]Arguments:[/bold] {_esc(str(dt['args']))}")
 
     if dt.get("definition_type"):
-        console.print(f"[bold]Definition:[/bold] {dt['definition_type']}")
+        console.print(f"[bold]Definition:[/bold] {_esc(str(dt['definition_type']))}")
 
     if dt.get("return_type"):
-        console.print(f"[bold]Return Type:[/bold] {dt['return_type']}")
+        console.print(f"[bold]Return Type:[/bold] {_esc(str(dt['return_type']))}")
 
     if dt.get("source_category"):
-        console.print(f"[bold]Category:[/bold] {dt['source_category']}")
+        console.print(f"[bold]Category:[/bold] {_esc(str(dt['source_category']))}")
 
     if db_path:
         _show_notes_section("data_type", dt["name"], db_path)
@@ -1039,7 +1111,7 @@ def _display_custom_loc_detail(cl: dict, db_path=None) -> None:
     console.print(Panel(f"[bold cyan]{cl['name']}[/bold cyan]", title="Custom Localization"))
 
     if cl.get("scope"):
-        console.print(f"\n[bold]Scope:[/bold] {cl['scope']}")
+        console.print(f"\n[bold]Scope:[/bold] {_esc(str(cl['scope']))}")
 
     console.print(f"[bold]Random Valid:[/bold] {'Yes' if cl.get('random_valid') else 'No'}")
 

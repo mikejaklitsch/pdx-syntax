@@ -61,8 +61,10 @@ venv.bak/
 *.swp
 *.swo
 
-# Database files (keep schema, not user data)
+# The built syntax DB ships with the repo so clones work without
+# re-dumping game data; other .db files stay untracked.
 *.db
+!src/pdx_syntax/data/eu5_syntax.db
 !src/pdx_syntax/data/.gitkeep
 
 # Rate limit state

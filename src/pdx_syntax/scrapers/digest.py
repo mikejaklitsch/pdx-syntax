@@ -1,15 +1,37 @@
 """Parse EU5 game-dumped log files and populate the database."""
 
+import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from ..database import get_connection, init_database, record_data_source, rebuild_fts_indexes
+from ..database import get_connection, init_database, record_data_source, rebuild_fts_indexes, set_meta
 from .categories import categorize_item, categorize_modifier, categorize_on_action
 
-EU5_USER_DIR = Path("/mnt/c/Users/Mjaklitsch/Documents/Paradox Interactive/Europa Universalis V")
+# Paradox user directory (where the game dumps docs/ and logs/data_types/).
+# Override with $PDX_USER_DIR on other machines.
+EU5_USER_DIR = Path(os.environ.get(
+    "PDX_USER_DIR",
+    "/mnt/c/Users/Mjaklitsch/Documents/Paradox Interactive/Europa Universalis V"))
 DEFAULT_DOCS_DIR = EU5_USER_DIR / "docs"
 DEFAULT_DATA_TYPES_DIR = EU5_USER_DIR / "logs" / "data_types"
+
+# Game install root (for the patch checksum). Override with $PDX_GAME_ROOT.
+DEFAULT_GAME_ROOT = Path(os.environ.get(
+    "PDX_GAME_ROOT",
+    "/mnt/d/Program Files (x86)/Steam/steamapps/common/Europa Universalis V"))
+
+
+def read_game_checksum(game_root: Optional[Path] = None) -> Optional[str]:
+    """Current game patch checksum from binaries/checksum.txt, or None."""
+    root = game_root or DEFAULT_GAME_ROOT
+    try:
+        text = (root / "binaries" / "checksum.txt").read_text(
+            encoding="utf-8", errors="ignore").strip()
+        return text or None
+    except OSError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +380,18 @@ def digest_update(
     if verbose:
         print(f"Reading game data (version {version})...")
 
+    checksum_file = DEFAULT_GAME_ROOT / "binaries" / "checksum.txt"
+    try:
+        newest_dump = max(
+            (f.stat().st_mtime for f in docs_dir.glob("*.log")), default=0)
+        if newest_dump and checksum_file.is_file() and \
+                newest_dump < checksum_file.stat().st_mtime:
+            print("WARNING: the docs/ dumps are older than the current game "
+                  "install — re-dump script docs from the in-game console "
+                  "before updating, or the DB will describe the previous patch.")
+    except OSError:
+        pass
+
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
@@ -578,6 +612,14 @@ def digest_update(
     if verbose:
         print("Rebuilding search indexes...")
     rebuild_fts_indexes(db_path)
+
+    # Record what this DB was built against so the CLI can warn when the
+    # game patches and the dumps go stale.
+    checksum = read_game_checksum()
+    if checksum:
+        set_meta("game_checksum_at_update", checksum, db_path)
+    set_meta("game_version_at_update", version, db_path)
+    set_meta("updated_at", datetime.now().isoformat(timespec="seconds"), db_path)
 
     return stats
 
