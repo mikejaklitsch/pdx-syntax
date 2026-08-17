@@ -32,20 +32,25 @@ def test_init_database(temp_db):
     expected = {
         "schema_version",
         "data_sources",
-        "game_versions",
+        "meta",
         "scope_types",
         "effects",
         "triggers",
         "scopes",
         "modifiers",
         "on_actions",
-        "defines",
-        "localization_patterns",
-        "syntax_templates",
-        "change_log",
+        "custom_localizations",
+        "data_types",
+        "notes",
     }
 
     assert expected.issubset(tables)
+
+    # The seed-only / stub tables should be gone now that the tool is
+    # scrape-plus-notes only.
+    removed = {"game_versions", "defines", "localization_patterns",
+               "syntax_templates", "change_log"}
+    assert removed.isdisjoint(tables)
     conn.close()
 
 

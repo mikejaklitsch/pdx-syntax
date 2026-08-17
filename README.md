@@ -54,8 +54,8 @@ Force either mode with `--plain` or `--table` (global options, e.g. `pdx-syntax 
 The database is built from files the game itself dumps. When EU5 patches:
 
 1. Launch the game with `-debug_mode` and open the console.
-2. Run the docs dump (`script_docs`). It writes `docs/*.log` (effects, triggers, modifiers, on_actions, event_targets, custom_localization) to the Paradox user directory.
-3. Run the data-types dump (`DumpDataTypes`; check console autocomplete if the name differs in your version). It writes `logs/data_types/`.
+2. Run the docs dump (`script_docs`). It writes `docs/*.log` (effects, triggers, modifiers, on_actions, event_targets, custom_localization) plus `logs/event_scopes.log` (scope-type capabilities) to the Paradox user directory.
+3. Run the data-types dump (`DumpDataTypes`; check console autocomplete if the name differs in your version). It writes `logs/data_types/` (including the GUI data types).
 4. Run:
 
 ```bash
@@ -82,16 +82,15 @@ Or pass `--docs-dir` / `--data-types-dir` to `update` directly.
 | `scope <query>` | Search scopes/iterators |
 | `modifier <query>` | Search modifiers |
 | `on_action <query>` | Search on_actions |
-| `promote <query>` | Search data types (promotes, functions) |
+| `promote <query>` | Search data types (promotes, functions) by name, usage, or return type |
+| `gui <query>` | Search GUI functions/promotes/types (for .gui files) |
 | `custom-loc <query>` | Search custom localization functions |
 | `search <query>` | Full-text search |
-| `note add\|list\|rm` | Attach findings to entries |
-| `template <name>` / `templates` | Syntax templates |
-| `categories` / `scopes` | List filter values |
-| `changes <version>` | Show version changes |
+| `note add\|list\|rm` | Attach findings to entries (persist across updates) |
+| `categories` | List filter values |
+| `scopes [name]` | List scope types, or show one scope's capabilities |
 | `stats` | Database statistics |
 | `update` | Rebuild DB from game dumps |
-| `seed` | Load built-in fallback data only |
 | `init` | Initialize an empty database |
 
 ## Search Options
@@ -101,7 +100,9 @@ All search commands support:
 - `-n, --limit N` - Maximum results (default: 10)
 - `--exact` - Exact name match with full detail view
 
-Effect/Trigger: `-s/--scope`, `-c/--category`. Scope: `-t/--type`, `--iterator`. Modifier: `-c/--category`, `-s/--scope`, `--boolean`. Promote: `-t/--type`, `-c/--category`, `-d/--definition`. Custom-loc: `-s/--scope`, `-e/--entries`.
+Effect/Trigger: `-s/--scope`, `-c/--category`. Scope: `-t/--type`, `--iterator`. Modifier: `-c/--category`, `-s/--scope`, `--boolean`. Promote: `-t/--type`, `-c/--category`, `-d/--definition`, `-r/--returns`. GUI: `-t/--type` (owner), `-r/--returns`, `-d/--definition`, `--internal`. Custom-loc: `-s/--scope`, `-e/--entries`.
+
+`promote` and `gui` match name, usage (description), and return type. An empty query plus a filter lists everything matching it, e.g. `gui "" --returns CString` or `promote "" --returns Country -t Country`.
 
 ## Database Location
 

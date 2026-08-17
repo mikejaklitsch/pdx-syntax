@@ -22,10 +22,10 @@ from .search import (
     fts_search,
     list_categories,
     list_scope_types,
+    get_scope_type,
     get_by_name,
     suggest_similar,
     find_in_other_tables,
-    get_changes_for_version,
     add_note,
     get_notes,
     get_all_notes,
@@ -74,7 +74,9 @@ def _warn_if_stale(db_path):
         _err_console.print(
             "[yellow]WARNING: the game has patched since this syntax DB was "
             "built (checksum mismatch). Re-dump script docs from the in-game "
-            "console, then run 'pdx-syntax update'.[/yellow]")
+            "console, then run 'pdx-syntax update'. Note that this likely only "
+            "will result in non-recorded, new syntax items, rather than invalidation "
+            "of existing ones.[/yellow]")
 
 
 @main.command()
@@ -116,7 +118,14 @@ The database has 7 searchable tables.  Entries can appear in more than one.
 
 [bold]DATA TYPES[/bold]  [dim]pdx-syntax promote <query>[/dim]
   Promotes, functions, and types for script/GUI/loc: GetCapital, MakeScope.
-  Filters: -t/--type <parent_type>  -c/--category  -d/--definition <def_type>
+  Matches name, usage (description), AND return type.
+  Filters: -t/--type <parent_type>  -c/--category  -d/--definition  -r/--returns
+
+[bold]GUI[/bold]  [dim]pdx-syntax gui <query>[/dim]
+  GUI functions/promotes/types for .gui files: GetScriptedGui, tooltip helpers.
+  Same power as promote, scoped to GUI. Search by usage or return type; empty
+  query + a filter lists everything (e.g. gui "" --returns CString).
+  Filters: -t/--type <owner>  -r/--returns <type>  -d/--definition  --internal
 
 [bold]CUSTOM LOCALIZATIONS[/bold]  [dim]pdx-syntax custom-loc <query>[/dim]
   Custom loc functions with entry keys for dynamic text.
@@ -210,7 +219,7 @@ def effect(ctx, query, scope, category, limit, exact):
         _handle_miss(query, "effects", db_path, "effect")
         return
 
-    _display_results_table(results, "Effects", ["name", "scope_type", "category", "description"])
+    _display_results_table(results, "Effects", ["name", "scope_type", "category", "description"], db_path=db_path)
 
 
 @main.command()
@@ -244,7 +253,7 @@ def trigger(ctx, query, scope, category, limit, exact):
         _handle_miss(query, "triggers", db_path, "trigger")
         return
 
-    _display_results_table(results, "Triggers", ["name", "scope_type", "category", "description"])
+    _display_results_table(results, "Triggers", ["name", "scope_type", "category", "description"], db_path=db_path)
 
 
 @main.command()
@@ -281,7 +290,8 @@ def scope(ctx, query, scope_type, iterator, limit, exact):
         return
 
     _display_results_table(
-        results, "Scopes", ["name", "scope_type", "target_type", "is_iterator", "description"]
+        results, "Scopes", ["name", "scope_type", "target_type", "is_iterator", "description"],
+        db_path=db_path,
     )
 
 
@@ -325,7 +335,8 @@ def modifier(ctx, query, category, scope_type, boolean, limit, exact):
         return
 
     _display_results_table(
-        results, "Modifiers", ["name", "category", "scope_type", "is_boolean", "description"]
+        results, "Modifiers", ["name", "category", "scope_type", "is_boolean", "description"],
+        db_path=db_path,
     )
 
 
@@ -359,7 +370,7 @@ def on_action(ctx, query, scope_type, limit, exact):
         _handle_miss(query, "on_actions", db_path, "on_action")
         return
 
-    _display_results_table(results, "On Actions", ["name", "scope_type", "description"])
+    _display_results_table(results, "On Actions", ["name", "scope_type", "description"], db_path=db_path)
 
 
 @main.command()
@@ -367,16 +378,21 @@ def on_action(ctx, query, scope_type, limit, exact):
 @click.option("-t", "--type", "parent_type", help="Filter by parent type (e.g., Country)")
 @click.option("-c", "--category", "source_category", help="Filter by source category (script, gui, common, uncategorized, internal_gui)")
 @click.option("-d", "--definition", "definition_type", help="Filter by definition type (e.g., Promote, Function, Type)")
+@click.option("-r", "--returns", "return_type", help="Filter by return type (e.g., bool, CString, Country)")
 @click.option("-n", "--limit", default=10, help="Maximum results")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
-def promote(ctx, query, parent_type, source_category, definition_type, limit, exact):
+def promote(ctx, query, parent_type, source_category, definition_type, return_type, limit, exact):
     """Search data types (promotes, functions, types).
+
+    Matches name, description (usage) and return type, so you can search by
+    what a function does or returns, not only its name.
 
     Examples:
         pdx-syntax promote GetCapital
         pdx-syntax promote GetCapital --type Country
-        pdx-syntax promote Variable --category script
+        pdx-syntax promote session --category gui        # by usage
+        pdx-syntax promote "" --returns Country -n 20     # everything returning Country
         pdx-syntax promote MakeScope --definition Function
     """
     db_path = ctx.obj["db_path"]
@@ -394,6 +410,7 @@ def promote(ctx, query, parent_type, source_category, definition_type, limit, ex
         parent_type=parent_type,
         source_category=source_category,
         definition_type=definition_type,
+        return_type=return_type,
         limit=limit,
         db_path=db_path,
     )
@@ -403,7 +420,63 @@ def promote(ctx, query, parent_type, source_category, definition_type, limit, ex
         return
 
     _display_results_table(
-        results, "Data Types", ["name", "definition_type", "return_type", "source_category", "description"]
+        results, "Data Types", ["name", "definition_type", "return_type", "source_category", "description"],
+        db_path=db_path,
+    )
+
+
+@main.command()
+@click.argument("query", required=False, default="")
+@click.option("-t", "--type", "parent_type", help="Filter by owning type (e.g., PdxGuiWidget, LobbyView)")
+@click.option("-r", "--returns", "return_type", help="Filter by return type (e.g., bool, CString, void)")
+@click.option("-d", "--definition", "definition_type", help="Filter by definition type (Function, Promote, Type)")
+@click.option("--internal", is_flag=True, help="Include engine-internal GUI types (internalclausewitzgui)")
+@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("--exact", is_flag=True, help="Exact name match only")
+@click.pass_context
+def gui(ctx, query, parent_type, return_type, definition_type, internal, limit, exact):
+    """Search GUI functions, promotes, and types (for .gui files).
+
+    Same retrieval power as the script commands, scoped to GUI data types.
+    Matches name, usage (description), and return type. By default only the
+    modder-facing 'gui' category; add --internal for engine internals.
+
+    Examples:
+        pdx-syntax gui GetScriptedGui
+        pdx-syntax gui tooltip                 # by usage
+        pdx-syntax gui "" --returns CString    # every GUI call returning a string
+        pdx-syntax gui "" --type PdxGuiWidget  # everything on PdxGuiWidget
+        pdx-syntax gui progress --internal     # include engine internals
+    """
+    db_path = ctx.obj["db_path"]
+
+    if exact:
+        result = get_by_name(query, "data_types", db_path)
+        if result and result.get("source_category") in ("gui", "internal_gui"):
+            _display_data_type_detail(result, db_path)
+        else:
+            _handle_miss(query, "data_types", db_path, "GUI data type")
+        return
+
+    categories = ["gui", "internal_gui"] if internal else ["gui"]
+    results = search_data_types(
+        query,
+        parent_type=parent_type,
+        source_categories=categories,
+        definition_type=definition_type,
+        return_type=return_type,
+        limit=limit,
+        db_path=db_path,
+    )
+
+    if not results:
+        _handle_miss(query, "data_types", db_path, "GUI data type")
+        return
+
+    _display_results_table(
+        results, "GUI Data Types",
+        ["name", "definition_type", "return_type", "parent_type", "description"],
+        db_path=db_path,
     )
 
 
@@ -438,7 +511,7 @@ def custom_loc(ctx, query, scope, entries, limit, exact):
         _handle_miss(query, "custom_localizations", db_path, "custom localization")
         return
 
-    _display_results_table(results, "Custom Localizations", ["name", "scope", "random_valid", "entries"])
+    _display_results_table(results, "Custom Localizations", ["name", "scope", "random_valid", "entries"], db_path=db_path)
 
 
 @main.command()
@@ -447,7 +520,8 @@ def custom_loc(ctx, query, scope, entries, limit, exact):
     "-t",
     "--type",
     "item_type",
-    type=click.Choice(["effects", "triggers", "scopes", "modifiers"]),
+    type=click.Choice(["effects", "triggers", "scopes", "modifiers",
+                       "data_types", "custom_localizations"]),
     default="effects",
     help="Type to search",
 )
@@ -459,6 +533,7 @@ def search(ctx, query, item_type, limit):
     Examples:
         pdx-syntax search "army morale" --type modifiers
         pdx-syntax search "iterate country" --type scopes
+        pdx-syntax search "server session" --type data_types   # incl. GUI
     """
     db_path = ctx.obj["db_path"]
     results = fts_search(query, item_type, limit=limit, db_path=db_path)
@@ -474,9 +549,11 @@ def search(ctx, query, item_type, limit):
         "triggers": ["name", "scope_type", "category", "description"],
         "scopes": ["name", "scope_type", "target_type", "description"],
         "modifiers": ["name", "category", "scope_type", "description"],
+        "data_types": ["name", "definition_type", "return_type", "source_category", "description"],
+        "custom_localizations": ["name", "scope", "entries"],
     }
 
-    _display_results_table(results, item_type.title(), columns[item_type])
+    _display_results_table(results, item_type.title(), columns[item_type], db_path=db_path)
 
 
 @main.command()
@@ -517,71 +594,87 @@ def categories(ctx, item_type):
 
 
 @main.command()
+@click.argument("name", required=False)
 @click.pass_context
-def scopes(ctx):
-    """List all scope types."""
-    db_path = ctx.obj["db_path"]
-    scope_list = list_scope_types(db_path)
+def scopes(ctx, name):
+    """List all scope types, or show one scope type's capabilities.
 
+    Examples:
+        pdx-syntax scopes            # list every scope type
+        pdx-syntax scopes country    # capabilities of the 'country' scope
+    """
+    db_path = ctx.obj["db_path"]
+
+    if name:
+        st = get_scope_type(name, db_path)
+        if not st:
+            suggestions = suggest_similar(name, "scope_types", db_path=db_path)
+            console.print(f"[yellow]No scope type '{name}'[/yellow]")
+            if suggestions:
+                console.print("[bold]Did you mean:[/bold]")
+                for s, score in suggestions:
+                    console.print(f"  - {s} [dim]({score})[/dim]")
+            return
+        _display_scope_type_detail(st)
+        return
+
+    scope_list = list_scope_types(db_path)
     if scope_list:
-        console.print("\n[bold]Available Scope Types:[/bold]")
+        console.print(f"\n[bold]Available Scope Types ({len(scope_list)}):[/bold]")
         for s in scope_list:
             console.print(f"  - {s}")
+        console.print("[dim]Tip: pdx-syntax scopes <name> shows a scope's capabilities.[/dim]")
     else:
         console.print("[yellow]No scope types found. Run 'pdx-syntax update' to populate.[/yellow]")
 
 
-@main.command()
-@click.argument("version")
-@click.pass_context
-def changes(ctx, version):
-    """Show changes for a specific game version.
+def _display_scope_type_detail(st: dict) -> None:
+    """Display a scope type's capabilities from event_scopes.log."""
+    console.print(Panel(f"[bold cyan]{st['name']}[/bold cyan]", title="Scope Type"))
 
-    Examples:
-        pdx-syntax changes 1.1.0
-        pdx-syntax changes 1.0.10
-    """
-    db_path = ctx.obj["db_path"]
-    change_list = get_changes_for_version(version, db_path)
+    if st.get("description"):
+        console.print(f"\n[bold]Description:[/bold] {_esc(str(st['description']))}")
+    if st.get("save_token"):
+        console.print(f"[bold]Save Token:[/bold] {_esc(str(st['save_token']))}")
 
-    if not change_list:
-        console.print(f"[yellow]No changes recorded for version {version}[/yellow]")
-        return
+    def _cap(label, key):
+        val = st.get(key)
+        if val is None:
+            return
+        console.print(f"[bold]{label}:[/bold] {'Yes' if val else 'No'}")
 
-    rows = [
-        {
-            "name": c["item_name"],
-            "item_type": c["item_type"],
-            "change_type": c["change_type"],
-            "description": c.get("description", ""),
-        }
-        for c in change_list
-    ]
-    _display_results_table(rows, f"Changes in {version}",
-                           ["name", "item_type", "change_type", "description"])
+    _cap("Evaluate Triggers", "evaluate_triggers")
+    _cap("Execute Effects", "execute_effects")
+    _cap("Change Scopes", "change_scopes")
+    _cap("Stores Variables", "stores_variables")
 
 
 @main.command()
 @click.option("--docs-dir", type=click.Path(exists=True), help="Path to EU5 docs/ directory")
 @click.option("--data-types-dir", type=click.Path(exists=True), help="Path to EU5 logs/data_types/ directory")
 @click.option("--version", help="Game version label (auto-detected if omitted)")
-@click.option("--offline", is_flag=True, help="Use only built-in seed data (no file reading)")
 @click.pass_context
-def update(ctx, docs_dir, data_types_dir, version, offline):
+def update(ctx, docs_dir, data_types_dir, version):
     """Update the database from game-dumped log files.
 
     Reads the .log and data_types files that EU5 dumps to its user
     directory.  By default looks in the standard Paradox location;
     use --docs-dir / --data-types-dir to override.
 
-    Use --offline to load only the built-in seed data.
+    The game dumps are the only data source; every run wipes and rebuilds
+    the tables from them. Notes you attach to entries are kept separately
+    and survive the rebuild.
     """
     from pathlib import Path as _Path
-    from .scrapers.digest import digest_update, DEFAULT_DOCS_DIR, DEFAULT_DATA_TYPES_DIR
+    from .scrapers.digest import (
+        digest_update, DEFAULT_DOCS_DIR, DEFAULT_DATA_TYPES_DIR, DEFAULT_LOGS_DIR,
+    )
 
     db_path = ctx.obj["db_path"]
     dd = _Path(docs_dir) if docs_dir else DEFAULT_DOCS_DIR
     dtd = _Path(data_types_dir) if data_types_dir else DEFAULT_DATA_TYPES_DIR
+    # event_scopes.log lives in logs/, which is data_types/'s parent.
+    ld = dtd.parent if data_types_dir else DEFAULT_LOGS_DIR
 
     console.print("[bold]Updating database from game files...[/bold]")
     try:
@@ -589,14 +682,15 @@ def update(ctx, docs_dir, data_types_dir, version, offline):
             db_path,
             docs_dir=dd,
             data_types_dir=dtd,
+            logs_dir=ld,
             game_version=version,
             verbose=True,
-            offline=offline,
         )
         console.print("\n[green]Update complete![/green]")
         console.print(f"  Effects: {stats.get('effects', 0)}")
         console.print(f"  Triggers: {stats.get('triggers', 0)}")
         console.print(f"  Scopes: {stats.get('scopes', 0)}")
+        console.print(f"  Scope Types: {stats.get('scope_types', 0)}")
         console.print(f"  Modifiers: {stats.get('modifiers', 0)}")
         console.print(f"  On Actions: {stats.get('on_actions', 0)}")
         console.print(f"  Custom Localizations: {stats.get('custom_localizations', 0)}")
@@ -605,113 +699,6 @@ def update(ctx, docs_dir, data_types_dir, version, offline):
         console.print(f"[red]Update failed: {e}[/red]")
         import traceback
         traceback.print_exc()
-
-
-@main.command()
-@click.option("--force", is_flag=True, help="Force reseed even if already seeded")
-@click.pass_context
-def seed(ctx, force):
-    """Seed the database with initial data.
-
-    This loads the built-in EU5 syntax data without fetching from the web.
-    Use this for offline setup or to reset to known good data.
-    """
-    from .seed import seed_database
-
-    db_path = ctx.obj["db_path"]
-
-    with console.status("[bold green]Seeding database with initial data..."):
-        try:
-            stats = seed_database(db_path, force=force)
-            console.print("[green]Seed complete![/green]")
-            console.print(f"  Scope Types: {stats.get('scope_types', 0)}")
-            console.print(f"  Triggers: {stats.get('triggers', 0)}")
-            console.print(f"  Scopes: {stats.get('scopes', 0)}")
-            console.print(f"  Effects: {stats.get('effects', 0)}")
-            console.print(f"  Modifiers: {stats.get('modifiers', 0)}")
-            console.print(f"  On Actions: {stats.get('on_actions', 0)}")
-            console.print(f"  Templates: {stats.get('templates', 0)}")
-            console.print(f"  Version Changes: {stats.get('changes', 0)}")
-        except Exception as e:
-            console.print(f"[red]Seed failed: {e}[/red]")
-
-
-@main.command()
-@click.argument("name")
-@click.pass_context
-def template(ctx, name):
-    """Show a syntax template by name.
-
-    Examples:
-        pdx-syntax template event_structure
-        pdx-syntax template scripted_effect
-    """
-    from .database import get_connection
-
-    db_path = ctx.obj["db_path"]
-    conn = get_connection(db_path)
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM syntax_templates WHERE name = ?", (name,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        # Try fuzzy match
-        conn = get_connection(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM syntax_templates")
-        all_names = [r[0] for r in cursor.fetchall()]
-        conn.close()
-
-        if all_names:
-            from rapidfuzz import process
-            matches = process.extract(name, all_names, limit=3)
-            console.print(f"[yellow]Template '{name}' not found. Did you mean:[/yellow]")
-            for match, score, _ in matches:
-                console.print(f"  - {match}")
-        else:
-            console.print("[yellow]No templates found. Run 'pdx-syntax seed' first.[/yellow]")
-        return
-
-    template_data = dict(row)
-    console.print(Panel(f"[bold cyan]{template_data['name']}[/bold cyan]", title="Template"))
-
-    if template_data.get("description"):
-        console.print(f"\n[bold]Description:[/bold] {_esc(str(template_data['description']))}")
-
-    if template_data.get("category"):
-        console.print(f"[bold]Category:[/bold] {_esc(str(template_data['category']))}")
-
-    if template_data.get("template"):
-        console.print("\n[bold]Template:[/bold]")
-        console.print(Syntax(template_data["template"], "text", theme="monokai"))
-
-    if template_data.get("parameters"):
-        console.print(f"\n[bold]Parameters:[/bold] {_esc(str(template_data['parameters']))}")
-
-
-@main.command()
-@click.pass_context
-def templates(ctx):
-    """List all available syntax templates."""
-    from .database import get_connection
-
-    db_path = ctx.obj["db_path"]
-    conn = get_connection(db_path)
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT name, category, description FROM syntax_templates ORDER BY category, name")
-    rows = cursor.fetchall()
-    conn.close()
-
-    if not rows:
-        console.print("[yellow]No templates found. Run 'pdx-syntax seed' first.[/yellow]")
-        return
-
-    _display_results_table(
-        [dict(r) for r in rows], "Syntax Templates", ["name", "category", "description"]
-    )
 
 
 @main.command()
@@ -724,8 +711,8 @@ def stats(ctx):
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
-    tables = ["effects", "triggers", "scopes", "modifiers", "on_actions",
-              "custom_localizations", "data_types", "change_log"]
+    tables = ["effects", "triggers", "scopes", "scope_types", "modifiers",
+              "on_actions", "custom_localizations", "data_types"]
 
     console.print("\n[bold]Database Statistics:[/bold]")
     for table in tables:
@@ -858,16 +845,28 @@ def _fmt_val(val, col: str) -> str:
     return str(val)
 
 
-def _display_results_table(results: list[dict], title: str, columns: list[str]) -> None:
+_TITLE_TO_NOTE_TYPE = {
+    "effects": "effect",
+    "triggers": "trigger",
+    "scopes": "scope",
+    "modifiers": "modifier",
+    "on actions": "on_action",
+    "data types": "data_type",
+    "gui data types": "data_type",
+    "custom localizations": "custom_loc",
+}
+
+
+def _display_results_table(results: list[dict], title: str, columns: list[str],
+                           db_path=None) -> None:
     """Display search results.
 
     Plain mode (default when piped): one flat block per result, full text,
     nothing squeezed or wrapped away. Table mode (terminals): rich table with
     fold overflow so cells wrap but are never truncated.
     """
-    # Even in table mode, fall back to plain when the terminal cannot give
-    # every column readable width (long names + narrow terminal would
-    # otherwise wrap cells down to a few characters per line).
+    note_type = _TITLE_TO_NOTE_TYPE.get(title.lower())
+
     use_plain = _PLAIN
     if not use_plain and results:
         name_width = max(len(str(r.get("name", ""))) for r in results)
@@ -892,14 +891,17 @@ def _display_results_table(results: list[dict], title: str, columns: list[str]) 
                 for line in text.splitlines():
                     if line.strip():
                         print(f"    {line.rstrip()}")
+            if note_type and db_path:
+                notes = get_notes(note_type, name, db_path=db_path)
+                for n in notes:
+                    for line in str(n["content"]).splitlines():
+                        print(f"    NOTE: {line.rstrip()}")
         print()
         return
 
     table = Table(title=f"{title} ({len(results)} results)")
     for col in columns:
         style = "cyan" if col == "name" else None
-        # Only the name column resists wrapping; every column folds instead
-        # of truncating, and body columns get the spare width.
         table.add_column(
             col.replace("_", " ").title(),
             style=style,
@@ -910,6 +912,15 @@ def _display_results_table(results: list[dict], title: str, columns: list[str]) 
 
     for result in results:
         table.add_row(*[_fmt_val(result.get(col, ""), col) for col in columns])
+        if note_type and db_path:
+            name = _fmt_val(result.get("name"), "name")
+            notes = get_notes(note_type, name, db_path=db_path)
+            for n in notes:
+                cells = [""] * len(columns)
+                cells[0] = f"[yellow]NOTE:[/yellow]"
+                desc_idx = next((i for i, c in enumerate(columns) if c in _BODY_COLUMNS), len(columns) - 1)
+                cells[desc_idx] = f"[yellow]{_esc(n['content'])}[/yellow]"
+                table.add_row(*cells)
 
     console.print(table)
     console.print("[dim]Tip: use `pdx-syntax note add <type> <name> \"<note>\"` to record findings.[/dim]")

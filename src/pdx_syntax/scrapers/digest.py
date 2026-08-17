@@ -15,7 +15,8 @@ EU5_USER_DIR = Path(os.environ.get(
     "PDX_USER_DIR",
     "/mnt/c/Users/Mjaklitsch/Documents/Paradox Interactive/Europa Universalis V"))
 DEFAULT_DOCS_DIR = EU5_USER_DIR / "docs"
-DEFAULT_DATA_TYPES_DIR = EU5_USER_DIR / "logs" / "data_types"
+DEFAULT_LOGS_DIR = EU5_USER_DIR / "logs"
+DEFAULT_DATA_TYPES_DIR = DEFAULT_LOGS_DIR / "data_types"
 
 # Game install root (for the patch checksum). Override with $PDX_GAME_ROOT.
 DEFAULT_GAME_ROOT = Path(os.environ.get(
@@ -281,6 +282,64 @@ def parse_custom_localization_log(content: str) -> list[dict]:
     return entries
 
 
+def parse_event_scopes_log(content: str) -> list[dict]:
+    """Parse event_scopes.log -> list of scope-type dicts.
+
+    Each entry looks like::
+
+        location:
+        Evaluate Triggers: yes
+        Execute Effects: yes
+        Change Scopes: yes
+        Save Token: loc
+        Stores Variables: yes
+
+    Returns dicts with name, save_token, and boolean evaluate_triggers /
+    execute_effects / change_scopes / stores_variables.
+    """
+    entries = []
+    # Blocks are separated by blank lines; the leading "Scope Types:" header
+    # block has no name line and is skipped.
+    for block in re.split(r"\n\s*\n", content):
+        lines = [l.strip() for l in block.strip().split("\n") if l.strip()]
+        if not lines:
+            continue
+
+        name = ""
+        fields = {}
+        for line in lines:
+            if ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.strip()
+            if not val and re.match(r"^[a-z][a-z0-9_]*$", key):
+                # A bare "name:" line naming the scope type.
+                if not name:
+                    name = key
+            else:
+                fields[key.lower()] = val
+
+        if not name:
+            continue
+
+        def _yn(key: str) -> Optional[int]:
+            v = fields.get(key)
+            if v is None:
+                return None
+            return 1 if v.lower() == "yes" else 0
+
+        entries.append({
+            "name": name,
+            "save_token": fields.get("save token") or None,
+            "evaluate_triggers": _yn("evaluate triggers"),
+            "execute_effects": _yn("execute effects"),
+            "change_scopes": _yn("change scopes"),
+            "stores_variables": _yn("stores variables"),
+        })
+    return entries
+
+
 def parse_data_types(content: str) -> list[dict]:
     """Parse data_types_*.txt -> list of dicts with name, parent_type, args, description, definition_type, return_type."""
     entries = []
@@ -354,24 +413,22 @@ def digest_update(
     db_path: Optional[Path] = None,
     docs_dir: Path = DEFAULT_DOCS_DIR,
     data_types_dir: Path = DEFAULT_DATA_TYPES_DIR,
+    logs_dir: Path = DEFAULT_LOGS_DIR,
     game_version: Optional[str] = None,
     verbose: bool = True,
-    offline: bool = False,
 ) -> dict:
     """
     Main entry point: read game-dumped log files and populate DB.
 
     *docs_dir* is the EU5 docs/ folder containing .log files.
     *data_types_dir* is the EU5 logs/data_types/ folder containing .txt files.
-    If *offline* is True only built-in seed data is loaded.
+    *logs_dir* is the EU5 logs/ folder (event_scopes.log lives here).
+
+    The game dumps are the sole source of truth: every data table is wiped and
+    rebuilt from the files on each run. User notes are kept in a separate table
+    the rebuild never touches, so they persist across game patches.
     """
     init_database(db_path)
-
-    if offline:
-        if verbose:
-            print("Offline mode: loading seed data only...")
-        from ..seed import seed_database
-        return seed_database(db_path, force=True)
 
     if not docs_dir.is_dir():
         raise RuntimeError(f"Docs directory not found: {docs_dir}")
@@ -406,14 +463,15 @@ def digest_update(
         "effects": 0,
         "triggers": 0,
         "scopes": 0,
+        "scope_types": 0,
         "modifiers": 0,
         "on_actions": 0,
         "custom_localizations": 0,
         "data_types": 0,
     }
 
-    for table in ("effects", "triggers", "scopes", "modifiers", "on_actions",
-                  "custom_localizations", "data_types"):
+    for table in ("effects", "triggers", "scopes", "scope_types", "modifiers",
+                  "on_actions", "custom_localizations", "data_types"):
         cursor.execute(f"DELETE FROM {table}")
     conn.commit()
 
@@ -567,6 +625,30 @@ def digest_update(
             stats["custom_localizations"] += 1
         conn.commit()
 
+    # Scope Types (from logs/event_scopes.log)
+    if verbose:
+        print("Parsing scope types...")
+    content = _read_file(logs_dir, "event_scopes.log")
+    if content:
+        for stype in parse_event_scopes_log(content):
+            cursor.execute("""
+                INSERT OR REPLACE INTO scope_types
+                (name, save_token, evaluate_triggers, execute_effects,
+                 change_scopes, stores_variables, added_version, source_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                stype["name"],
+                stype["save_token"],
+                stype["evaluate_triggers"],
+                stype["execute_effects"],
+                stype["change_scopes"],
+                stype["stores_variables"],
+                version,
+                source_id,
+            ))
+            stats["scope_types"] += 1
+        conn.commit()
+
     # Data Types (from separate directory)
     if verbose:
         print("Parsing data types...")
@@ -600,12 +682,6 @@ def digest_update(
                 stats["data_types"] += 1
             conn.commit()
 
-    # Enrich from initial_data.py
-    if verbose:
-        print("Enriching with seed data...")
-    _enrich_from_seed(cursor, source_id)
-    conn.commit()
-
     conn.close()
 
     # Rebuild FTS
@@ -637,131 +713,3 @@ def _detect_game_version(docs_dir: Path) -> str:
             pass
     return "unknown"
 
-
-def _enrich_from_seed(cursor, source_id: int) -> None:
-    """Overlay examples/syntax from initial_data onto digest-parsed rows."""
-    from ..data.initial_data import (
-        EFFECTS,
-        FLOW_TRIGGERS,
-        VARIABLE_TRIGGERS,
-        GAME_STATE_TRIGGERS,
-        ITERATOR_SCOPES,
-        ON_ACTIONS,
-        MODIFIERS,
-        SYNTAX_TEMPLATES,
-        SCOPE_TYPES,
-    )
-
-    # Enrich effects
-    for e in EFFECTS:
-        cursor.execute(
-            "UPDATE effects SET syntax = COALESCE(NULLIF(syntax, ''), ?), "
-            "example = COALESCE(NULLIF(example, ''), ?), "
-            "parameters = COALESCE(NULLIF(parameters, ''), ?) "
-            "WHERE name = ?",
-            (e.get("syntax", ""), e.get("example", ""), e.get("parameters", ""), e["name"]),
-        )
-        # Insert if not present from digest
-        cursor.execute("""
-            INSERT OR IGNORE INTO effects (name, category, description, syntax, scope_type, parameters, example, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            e["name"], e.get("category"), e.get("description"), e.get("syntax"),
-            e.get("scope_type"), e.get("parameters"), e.get("example"), source_id,
-        ))
-
-    # Enrich triggers
-    for t in FLOW_TRIGGERS + VARIABLE_TRIGGERS + GAME_STATE_TRIGGERS:
-        cursor.execute(
-            "UPDATE triggers SET syntax = COALESCE(NULLIF(syntax, ''), ?), "
-            "example = COALESCE(NULLIF(example, ''), ?), "
-            "parameters = COALESCE(NULLIF(parameters, ''), ?) "
-            "WHERE name = ?",
-            (t.get("syntax", ""), t.get("example", ""), t.get("parameters", ""), t["name"]),
-        )
-        cursor.execute("""
-            INSERT OR IGNORE INTO triggers (name, category, description, syntax, scope_type, parameters, example, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            t["name"], t.get("category"), t.get("description"), t.get("syntax"),
-            t.get("scope_type"), t.get("parameters"), t.get("example"), source_id,
-        ))
-
-    # Enrich scopes / iterators
-    for s in ITERATOR_SCOPES:
-        cursor.execute(
-            "UPDATE scopes SET syntax = COALESCE(NULLIF(syntax, ''), ?), "
-            "example = COALESCE(NULLIF(example, ''), ?), "
-            "parameters = COALESCE(NULLIF(parameters, ''), ?) "
-            "WHERE name = ?",
-            (s.get("syntax", ""), s.get("example", ""), s.get("parameters", ""), s["name"]),
-        )
-        cursor.execute("""
-            INSERT OR IGNORE INTO scopes
-            (name, scope_type, target_type, description, syntax, parameters, example, is_iterator, iterator_type, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            s["name"], s.get("scope_type"), s.get("target_type"), s.get("description"),
-            s.get("syntax"), s.get("parameters"), s.get("example"),
-            s.get("is_iterator", 0), s.get("iterator_type"), source_id,
-        ))
-
-    # Enrich modifiers
-    for m in MODIFIERS:
-        cursor.execute(
-            "UPDATE modifiers SET description = COALESCE(NULLIF(description, ''), ?), "
-            "modifier_type = COALESCE(NULLIF(modifier_type, ''), ?), "
-            "scope_type = COALESCE(NULLIF(scope_type, ''), ?), "
-            "syntax = COALESCE(NULLIF(syntax, ''), ?), "
-            "parameters = COALESCE(NULLIF(parameters, ''), ?) "
-            "WHERE name = ?",
-            (
-                m.get("description", ""), m.get("modifier_type", ""),
-                m.get("scope_type", ""), m.get("syntax", ""),
-                m.get("parameters", ""), m["name"],
-            ),
-        )
-        cursor.execute("""
-            INSERT OR IGNORE INTO modifiers
-            (name, category, description, modifier_type, scope_type, is_boolean, default_value, color, percent, syntax, parameters, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            m["name"], m.get("category"), m.get("description"), m.get("modifier_type"),
-            m.get("scope_type"), m.get("is_boolean", 0), m.get("default_value"),
-            m.get("color"), m.get("percent", 0), m.get("syntax"), m.get("parameters"),
-            source_id,
-        ))
-
-    # Enrich on_actions
-    for oa in ON_ACTIONS:
-        cursor.execute(
-            "UPDATE on_actions SET description = COALESCE(NULLIF(description, ''), ?), "
-            "syntax = COALESCE(NULLIF(syntax, ''), ?), "
-            "parameters = COALESCE(NULLIF(parameters, ''), ?) "
-            "WHERE name = ?",
-            (oa.get("description", ""), oa.get("syntax", ""), oa.get("parameters", ""), oa["name"]),
-        )
-        cursor.execute("""
-            INSERT OR IGNORE INTO on_actions (name, category, description, scope_type, syntax, parameters, source_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            oa["name"], oa.get("category"), oa.get("description"),
-            oa.get("scope_type"), oa.get("syntax"), oa.get("parameters"), source_id,
-        ))
-
-    # Seed templates (these don't come from digests at all)
-    for tmpl in SYNTAX_TEMPLATES:
-        cursor.execute("""
-            INSERT OR REPLACE INTO syntax_templates (name, category, template, description, parameters, source_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            tmpl["name"], tmpl.get("category"), tmpl.get("template"),
-            tmpl.get("description"), tmpl.get("parameters"), source_id,
-        ))
-
-    # Seed scope types
-    for st in SCOPE_TYPES:
-        cursor.execute("""
-            INSERT OR REPLACE INTO scope_types (name, description)
-            VALUES (?, ?)
-        """, (st["name"], st["description"]))

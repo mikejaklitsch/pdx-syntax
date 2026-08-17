@@ -440,6 +440,17 @@ def list_scope_types(db_path: Optional[Path] = None) -> list[str]:
     return [row["name"] for row in rows]
 
 
+def get_scope_type(name: str, db_path: Optional[Path] = None) -> Optional[dict]:
+    """Get a single scope type with its full metadata, or None."""
+    conn = get_connection(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM scope_types WHERE name = ?", (name,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def get_by_name(
     name: str,
     item_type: str,
@@ -460,11 +471,23 @@ def search_data_types(
     query: str,
     parent_type: Optional[str] = None,
     source_category: Optional[str] = None,
+    source_categories: Optional[list[str]] = None,
     definition_type: Optional[str] = None,
+    return_type: Optional[str] = None,
     limit: int = 10,
     db_path: Optional[Path] = None,
 ) -> list[dict]:
-    """Search data types by name or description."""
+    """Search data types by name, usage (description), or return type.
+
+    The query is matched against name, description AND return type, so a GUI
+    function can be found by what it does or what it returns, not only by an
+    exact fragment of its name. Filters:
+      * parent_type       - the owning type (e.g. Country, PdxGuiWidget)
+      * source_category   - a single category (script, gui, internal_gui, ...)
+      * source_categories - a list of categories (OR'd); use for "gui + internal"
+      * definition_type   - Function, Promote, Type, ...
+      * return_type       - what the function returns (bool, CString, ...)
+    """
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
@@ -479,13 +502,26 @@ def search_data_types(
         sql += " AND source_category = ?"
         params.append(source_category)
 
+    if source_categories:
+        placeholders = ", ".join("?" for _ in source_categories)
+        sql += f" AND source_category IN ({placeholders})"
+        params.extend(source_categories)
+
     if definition_type:
         sql += " AND definition_type = ?"
         params.append(definition_type)
 
-    # Pre-filter with LIKE to avoid fuzzy scoring 25k+ rows
-    sql += " AND name LIKE ?"
-    params.append(f"%{query}%")
+    if return_type:
+        sql += " AND return_type = ?"
+        params.append(return_type)
+
+    # Pre-filter with LIKE (across name, description and return type) to avoid
+    # fuzzy-scoring 25k+ rows while still allowing usage/return-type queries.
+    # An empty query means "everything matching the filters".
+    if query:
+        sql += " AND (name LIKE ? OR description LIKE ? OR return_type LIKE ?)"
+        like = f"%{query}%"
+        params.extend([like, like, like])
 
     cursor.execute(sql, params)
     rows = cursor.fetchall()
@@ -494,14 +530,18 @@ def search_data_types(
     results = []
     for row in rows:
         row_dict = dict(row)
-        searchable = f"{row_dict.get('name', '')} {row_dict.get('description', '')}"
-        score = fuzz.partial_ratio(query.lower(), searchable.lower())
+        if query:
+            searchable = " ".join(str(row_dict.get(c, "") or "") for c in
+                                  ("name", "description", "return_type"))
+            score = fuzz.partial_ratio(query.lower(), searchable.lower())
+            if score < 50:
+                continue
+        else:
+            score = 100
+        row_dict["_score"] = score
+        results.append(row_dict)
 
-        if score >= 50:
-            row_dict["_score"] = score
-            results.append(row_dict)
-
-    results.sort(key=lambda x: x["_score"], reverse=True)
+    results.sort(key=lambda x: (x["_score"], x.get("name", "")), reverse=True)
 
     seen = set()
     deduped = []
@@ -623,20 +663,3 @@ def delete_note(note_id: int, db_path: Optional[Path] = None) -> bool:
     return deleted
 
 
-def get_changes_for_version(
-    version: str,
-    db_path: Optional[Path] = None,
-) -> list[dict]:
-    """Get all changes recorded for a specific game version."""
-    conn = get_connection(db_path)
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT * FROM change_log
-        WHERE game_version = ?
-        ORDER BY item_type, item_name
-    """, (version,))
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [dict(row) for row in rows]

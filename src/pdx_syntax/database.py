@@ -18,6 +18,18 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+def _add_missing_columns(cursor, table: str, columns: dict[str, str]) -> None:
+    """Add any columns missing from an existing table (lightweight migration).
+
+    CREATE TABLE IF NOT EXISTS never alters a table that already exists, so
+    databases built before a column was added need it backfilled here.
+    """
+    existing = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+    for name, coltype in columns.items():
+        if name not in existing:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coltype}")
+
+
 def init_database(db_path: Optional[Path] = None) -> None:
     """Initialize the database schema."""
     conn = get_connection(db_path)
@@ -52,27 +64,34 @@ def init_database(db_path: Optional[Path] = None) -> None:
         )
     """)
 
-    # Game versions for tracking changes
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS game_versions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            version TEXT NOT NULL UNIQUE,
-            release_date TEXT,
-            notes TEXT
-        )
-    """)
-
-    # Scope types (country, character, location, etc.)
+    # Scope types (country, character, location, etc.).
+    # Metadata columns mirror event_scopes.log: whether the scope can evaluate
+    # triggers / execute effects / change scope, its save token, and whether it
+    # can store variables.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS scope_types (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
             description TEXT,
             parent_scope TEXT,
+            save_token TEXT,
+            evaluate_triggers INTEGER,
+            execute_effects INTEGER,
+            change_scopes INTEGER,
+            stores_variables INTEGER,
             added_version TEXT,
-            deprecated_version TEXT
+            deprecated_version TEXT,
+            source_id INTEGER
         )
     """)
+    _add_missing_columns(cursor, "scope_types", {
+        "save_token": "TEXT",
+        "evaluate_triggers": "INTEGER",
+        "execute_effects": "INTEGER",
+        "change_scopes": "INTEGER",
+        "stores_variables": "INTEGER",
+        "source_id": "INTEGER",
+    })
 
     # Effects (actions that change game state)
     cursor.execute("""
@@ -170,50 +189,6 @@ def init_database(db_path: Optional[Path] = None) -> None:
         )
     """)
 
-    # Defines (game constants)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS defines (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            category TEXT,
-            description TEXT,
-            default_value TEXT,
-            value_type TEXT,
-            added_version TEXT,
-            deprecated_version TEXT,
-            source_id INTEGER,
-            FOREIGN KEY (source_id) REFERENCES data_sources(id)
-        )
-    """)
-
-    # Localization keys
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS localization_patterns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pattern TEXT NOT NULL,
-            context TEXT,
-            description TEXT,
-            example TEXT,
-            source_id INTEGER,
-            FOREIGN KEY (source_id) REFERENCES data_sources(id)
-        )
-    """)
-
-    # Syntax templates (common patterns)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS syntax_templates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            category TEXT,
-            template TEXT NOT NULL,
-            description TEXT,
-            parameters TEXT,
-            example TEXT,
-            source_id INTEGER,
-            FOREIGN KEY (source_id) REFERENCES data_sources(id)
-        )
-    """)
-
     # Custom localization functions
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS custom_localizations (
@@ -245,23 +220,6 @@ def init_database(db_path: Optional[Path] = None) -> None:
         )
     """)
 
-    # Change log for tracking modifications across versions
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS change_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            game_version TEXT NOT NULL,
-            change_type TEXT NOT NULL,
-            item_type TEXT NOT NULL,
-            item_name TEXT NOT NULL,
-            old_value TEXT,
-            new_value TEXT,
-            description TEXT,
-            recorded_at TEXT NOT NULL,
-            source_id INTEGER,
-            FOREIGN KEY (source_id) REFERENCES data_sources(id)
-        )
-    """)
-
     # Create indexes for fast searching
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_effects_name ON effects(name)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_effects_category ON effects(category)")
@@ -278,7 +236,6 @@ def init_database(db_path: Optional[Path] = None) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_data_types_name ON data_types(name)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_data_types_parent ON data_types(parent_type)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_data_types_category ON data_types(source_category)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_change_log_version ON change_log(game_version)")
 
     # Full-text search tables (standalone, manually synced)
     cursor.execute("""

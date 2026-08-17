@@ -8,6 +8,7 @@ from pdx_syntax.scrapers.digest import (
     parse_event_targets_log,
     parse_custom_localization_log,
     parse_data_types,
+    parse_event_scopes_log,
     _normalize_scopes,
     _detect_iterator,
 )
@@ -457,3 +458,51 @@ class TestParseDataTypes:
         assert fp["definition_type"] == "Type"
         assert fp["return_type"] == ""
         assert fp["parent_type"] is None
+
+
+EVENT_SCOPES_SAMPLE = """Scope Types:
+
+none:
+Evaluate Triggers: yes
+Execute Effects: yes
+Change Scopes: yes
+Save Token: none
+Stores Variables: no
+
+location:
+Evaluate Triggers: yes
+Execute Effects: yes
+Change Scopes: yes
+Save Token: loc
+Stores Variables: yes
+
+flag:
+Evaluate Triggers: no
+Execute Effects: no
+Change Scopes: no
+Save Token: flag
+Stores Variables: no
+"""
+
+
+class TestParseEventScopesLog:
+    def test_basic_parsing(self):
+        entries = parse_event_scopes_log(EVENT_SCOPES_SAMPLE)
+        # header block is skipped; three scope types remain
+        assert len(entries) == 3
+        assert "scope types" not in [e["name"] for e in entries]
+
+    def test_names(self):
+        names = [e["name"] for e in parse_event_scopes_log(EVENT_SCOPES_SAMPLE)]
+        assert names == ["none", "location", "flag"]
+
+    def test_metadata_flags(self):
+        by_name = {e["name"]: e for e in parse_event_scopes_log(EVENT_SCOPES_SAMPLE)}
+        loc = by_name["location"]
+        assert loc["save_token"] == "loc"
+        assert loc["evaluate_triggers"] == 1
+        assert loc["stores_variables"] == 1
+        flag = by_name["flag"]
+        assert flag["evaluate_triggers"] == 0
+        assert flag["change_scopes"] == 0
+        assert flag["stores_variables"] == 0
