@@ -24,6 +24,7 @@ from .search import (
     list_scope_types,
     get_scope_type,
     get_by_name,
+    get_all_by_name,
     suggest_similar,
     find_in_other_tables,
     add_note,
@@ -161,7 +162,31 @@ TABLE_COMMANDS = {
 
 def _handle_miss(query, table, db_path, label):
     """On a failed lookup, print did-you-mean suggestions and cross-table
-    hits instead of the full search guide."""
+    hits instead of the full search guide. When the top suggestion is an
+    exact name match (case-insensitive), auto-resolve to the full record."""
+
+    suggestions = suggest_similar(query, table, limit=10, db_path=db_path)
+    if suggestions:
+        top_name, top_score = suggestions[0]
+        if top_score >= 95 and top_name.lower() == query.lower():
+            if table == "scopes":
+                _display_scope_rows(get_all_by_name(top_name, table, db_path), db_path)
+                return
+            record = get_by_name(top_name, table, db_path)
+            if record:
+                detail_fn = {
+                    "effects": _display_effect_detail,
+                    "triggers": _display_trigger_detail,
+                    "scopes": _display_scope_detail,
+                    "modifiers": _display_modifier_detail,
+                    "on_actions": _display_on_action_detail,
+                    "data_types": _display_data_type_detail,
+                    "custom_localizations": _display_custom_loc_detail,
+                }.get(table)
+                if detail_fn:
+                    detail_fn(record, db_path)
+                    return
+
     console.print(f"[yellow]No {label} found matching '{query}'[/yellow]")
 
     other = find_in_other_tables(query, table, db_path=db_path)
@@ -172,7 +197,6 @@ def _handle_miss(query, table, db_path, label):
         )
         console.print(f"[green]Exact name exists in:[/green] {hints}")
 
-    suggestions = suggest_similar(query, table, db_path=db_path)
     if suggestions:
         console.print("[bold]Did you mean:[/bold]")
         for name, score in suggestions:
@@ -192,7 +216,7 @@ def info(ctx):
 @click.argument("query")
 @click.option("-s", "--scope", help="Filter by scope type")
 @click.option("-c", "--category", help="Filter by category")
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
 def effect(ctx, query, scope, category, limit, exact):
@@ -213,20 +237,20 @@ def effect(ctx, query, scope, category, limit, exact):
             _handle_miss(query, "effects", db_path, "effect")
         return
 
-    results = search_effects(query, scope=scope, category=category, limit=limit, db_path=db_path)
+    results = search_effects(query, scope=scope, category=category, limit=None, db_path=db_path)
 
     if not results:
         _handle_miss(query, "effects", db_path, "effect")
         return
 
-    _display_results_table(results, "Effects", ["name", "scope_type", "category", "description"], db_path=db_path)
+    _display_results_table(results, "Effects", ["name", "scope_type", "category", "description"], db_path=db_path, limit=limit)
 
 
 @main.command()
 @click.argument("query")
 @click.option("-s", "--scope", help="Filter by scope type")
 @click.option("-c", "--category", help="Filter by category")
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
 def trigger(ctx, query, scope, category, limit, exact):
@@ -247,20 +271,20 @@ def trigger(ctx, query, scope, category, limit, exact):
             _handle_miss(query, "triggers", db_path, "trigger")
         return
 
-    results = search_triggers(query, scope=scope, category=category, limit=limit, db_path=db_path)
+    results = search_triggers(query, scope=scope, category=category, limit=None, db_path=db_path)
 
     if not results:
         _handle_miss(query, "triggers", db_path, "trigger")
         return
 
-    _display_results_table(results, "Triggers", ["name", "scope_type", "category", "description"], db_path=db_path)
+    _display_results_table(results, "Triggers", ["name", "scope_type", "category", "description"], db_path=db_path, limit=limit)
 
 
 @main.command()
 @click.argument("query")
 @click.option("-t", "--type", "scope_type", help="Filter by scope type")
 @click.option("--iterator", is_flag=True, help="Show only iterator scopes")
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
 def scope(ctx, query, scope_type, iterator, limit, exact):
@@ -274,15 +298,15 @@ def scope(ctx, query, scope_type, iterator, limit, exact):
     db_path = ctx.obj["db_path"]
 
     if exact:
-        result = get_by_name(query, "scopes", db_path)
-        if result:
-            _display_scope_detail(result, db_path)
+        rows = get_all_by_name(query, "scopes", db_path)
+        if rows:
+            _display_scope_rows(rows, db_path)
         else:
             _handle_miss(query, "scopes", db_path, "scope")
         return
 
     results = search_scopes(
-        query, scope_type=scope_type, iterator_only=iterator, limit=limit, db_path=db_path
+        query, scope_type=scope_type, iterator_only=iterator, limit=None, db_path=db_path
     )
 
     if not results:
@@ -291,7 +315,7 @@ def scope(ctx, query, scope_type, iterator, limit, exact):
 
     _display_results_table(
         results, "Scopes", ["name", "scope_type", "target_type", "is_iterator", "description"],
-        db_path=db_path,
+        db_path=db_path, limit=limit,
     )
 
 
@@ -300,7 +324,7 @@ def scope(ctx, query, scope_type, iterator, limit, exact):
 @click.option("-c", "--category", help="Filter by category")
 @click.option("-s", "--scope", "scope_type", help="Filter by scope type")
 @click.option("--boolean", is_flag=True, help="Show only boolean modifiers")
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
 def modifier(ctx, query, category, scope_type, boolean, limit, exact):
@@ -326,7 +350,7 @@ def modifier(ctx, query, category, scope_type, boolean, limit, exact):
         category=category,
         scope_type=scope_type,
         boolean_only=boolean,
-        limit=limit,
+        limit=None,
         db_path=db_path,
     )
 
@@ -336,14 +360,14 @@ def modifier(ctx, query, category, scope_type, boolean, limit, exact):
 
     _display_results_table(
         results, "Modifiers", ["name", "category", "scope_type", "is_boolean", "description"],
-        db_path=db_path,
+        db_path=db_path, limit=limit,
     )
 
 
 @main.command()
 @click.argument("query")
 @click.option("-s", "--scope", "scope_type", help="Filter by scope type")
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
 def on_action(ctx, query, scope_type, limit, exact):
@@ -364,13 +388,13 @@ def on_action(ctx, query, scope_type, limit, exact):
             _handle_miss(query, "on_actions", db_path, "on_action")
         return
 
-    results = search_on_actions(query, scope_type=scope_type, limit=limit, db_path=db_path)
+    results = search_on_actions(query, scope_type=scope_type, limit=None, db_path=db_path)
 
     if not results:
         _handle_miss(query, "on_actions", db_path, "on_action")
         return
 
-    _display_results_table(results, "On Actions", ["name", "scope_type", "description"], db_path=db_path)
+    _display_results_table(results, "On Actions", ["name", "scope_type", "description"], db_path=db_path, limit=limit)
 
 
 @main.command()
@@ -379,7 +403,7 @@ def on_action(ctx, query, scope_type, limit, exact):
 @click.option("-c", "--category", "source_category", help="Filter by source category (script, gui, common, uncategorized, internal_gui)")
 @click.option("-d", "--definition", "definition_type", help="Filter by definition type (e.g., Promote, Function, Type)")
 @click.option("-r", "--returns", "return_type", help="Filter by return type (e.g., bool, CString, Country)")
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
 def promote(ctx, query, parent_type, source_category, definition_type, return_type, limit, exact):
@@ -405,13 +429,14 @@ def promote(ctx, query, parent_type, source_category, definition_type, return_ty
             _handle_miss(query, "data_types", db_path, "data type")
         return
 
+    query, parent_type, limit = _type_listing(query, parent_type, limit)
     results = search_data_types(
         query,
         parent_type=parent_type,
         source_category=source_category,
         definition_type=definition_type,
         return_type=return_type,
-        limit=limit,
+        limit=None,
         db_path=db_path,
     )
 
@@ -421,8 +446,42 @@ def promote(ctx, query, parent_type, source_category, definition_type, return_ty
 
     _display_results_table(
         results, "Data Types", ["name", "definition_type", "return_type", "source_category", "description"],
-        db_path=db_path,
+        db_path=db_path, limit=limit,
     )
+
+
+# 'common' data functions work in GUI, script and loc alike. The game leaves
+# most of its own types 'uncategorized' (LocationToBuildItem, Country), and
+# .gui files use them, so they belong in a GUI search too.
+GUI_CATEGORIES = ["gui", "common", "uncategorized"]
+
+
+def _type_listing(query, parent_type, limit):
+    """A query like "Scope." asks for every member of one type. Returns the
+    (query, parent_type, limit) to search with."""
+    if query.endswith(".") and not parent_type and query[:-1]:
+        return "", query[:-1], 0
+    return query, parent_type, limit
+
+
+def _hint_other_categories(query, parent_type, definition_type, return_type,
+                           categories, db_path):
+    """Say when categories the search left out also have matches."""
+    others = [r for r in search_data_types(
+        query, parent_type=parent_type, definition_type=definition_type,
+        return_type=return_type, limit=None, db_path=db_path)
+        if r.get("source_category") not in categories]
+    if not others:
+        return
+    by_cat = {}
+    for r in others:
+        by_cat.setdefault(r.get("source_category") or "?", []).append(r["name"])
+    parts = []
+    for cat, names in sorted(by_cat.items(), key=lambda kv: -len(kv[1])):
+        sample = ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
+        parts.append(f"{cat} {len(names)} ({sample})")
+    print(f"Other categories also match: {'; '.join(parts)}. "
+          f"Add --all to list them, or use pdx-syntax promote.")
 
 
 @main.command()
@@ -431,15 +490,22 @@ def promote(ctx, query, parent_type, source_category, definition_type, return_ty
 @click.option("-r", "--returns", "return_type", help="Filter by return type (e.g., bool, CString, void)")
 @click.option("-d", "--definition", "definition_type", help="Filter by definition type (Function, Promote, Type)")
 @click.option("--internal", is_flag=True, help="Include engine-internal GUI types (internalclausewitzgui)")
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("--all", "all_categories", is_flag=True,
+              help="Search every category (script and internal_gui too), like promote")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
-def gui(ctx, query, parent_type, return_type, definition_type, internal, limit, exact):
+def gui(ctx, query, parent_type, return_type, definition_type, internal, all_categories,
+        limit, exact):
     """Search GUI functions, promotes, and types (for .gui files).
 
     Same retrieval power as the script commands, scoped to GUI data types.
-    Matches name, usage (description), and return type. By default only the
-    modder-facing 'gui' category; add --internal for engine internals.
+    Matches name, usage (description), and return type. By default the
+    'gui', 'common' (Not, SelectLocalization: shared by GUI, script and loc)
+    and 'uncategorized' (the game's own types, such as LocationToBuildItem)
+    categories. --internal adds engine internals; --all adds 'script' too.
+    A query that ends in '.' (e.g. "LocationToBuildItem.") lists every
+    member of that type.
 
     Examples:
         pdx-syntax gui GetScriptedGui
@@ -447,44 +513,60 @@ def gui(ctx, query, parent_type, return_type, definition_type, internal, limit, 
         pdx-syntax gui "" --returns CString    # every GUI call returning a string
         pdx-syntax gui "" --type PdxGuiWidget  # everything on PdxGuiWidget
         pdx-syntax gui progress --internal     # include engine internals
+        pdx-syntax gui "LocationToBuildItem."  # every member of one type
     """
     db_path = ctx.obj["db_path"]
 
+    if all_categories:
+        categories = None
+    else:
+        categories = GUI_CATEGORIES + (["internal_gui"] if internal else [])
+
     if exact:
         result = get_by_name(query, "data_types", db_path)
-        if result and result.get("source_category") in ("gui", "internal_gui"):
+        if result and (categories is None or result.get("source_category") in categories):
             _display_data_type_detail(result, db_path)
+        elif result:
+            _display_data_type_detail(result, db_path)
+            console.print(f"[yellow]Note: '{_esc(query)}' is in the "
+                          f"'{_esc(str(result.get('source_category')))}' category, "
+                          f"not a GUI one.[/yellow]")
         else:
             _handle_miss(query, "data_types", db_path, "GUI data type")
         return
 
-    categories = ["gui", "internal_gui"] if internal else ["gui"]
+    query, parent_type, limit = _type_listing(query, parent_type, limit)
     results = search_data_types(
         query,
         parent_type=parent_type,
         source_categories=categories,
         definition_type=definition_type,
         return_type=return_type,
-        limit=limit,
+        limit=None,
         db_path=db_path,
     )
 
-    if not results:
+    if results:
+        _display_results_table(
+            results, "GUI Data Types",
+            ["name", "definition_type", "return_type", "parent_type", "source_category",
+             "description"],
+            db_path=db_path, limit=limit,
+        )
+    if categories is not None:
+        _hint_other_categories(query, parent_type, definition_type, return_type,
+                               categories, db_path)
+    if not results and query:
         _handle_miss(query, "data_types", db_path, "GUI data type")
-        return
-
-    _display_results_table(
-        results, "GUI Data Types",
-        ["name", "definition_type", "return_type", "parent_type", "description"],
-        db_path=db_path,
-    )
+    elif not results:
+        console.print("[yellow]No GUI data types match those filters[/yellow]")
 
 
 @main.command()
 @click.argument("query")
 @click.option("-s", "--scope", help="Filter by scope")
 @click.option("-e", "--entries", is_flag=True, help="Search within entry keys instead of names")
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.option("--exact", is_flag=True, help="Exact name match only")
 @click.pass_context
 def custom_loc(ctx, query, scope, entries, limit, exact):
@@ -505,13 +587,13 @@ def custom_loc(ctx, query, scope, entries, limit, exact):
             _handle_miss(query, "custom_localizations", db_path, "custom localization")
         return
 
-    results = search_custom_localizations(query, scope=scope, search_entries=entries, limit=limit, db_path=db_path)
+    results = search_custom_localizations(query, scope=scope, search_entries=entries, limit=None, db_path=db_path)
 
     if not results:
         _handle_miss(query, "custom_localizations", db_path, "custom localization")
         return
 
-    _display_results_table(results, "Custom Localizations", ["name", "scope", "random_valid", "entries"], db_path=db_path)
+    _display_results_table(results, "Custom Localizations", ["name", "scope", "random_valid", "entries"], db_path=db_path, limit=limit)
 
 
 @main.command()
@@ -525,7 +607,7 @@ def custom_loc(ctx, query, scope, entries, limit, exact):
     default="effects",
     help="Type to search",
 )
-@click.option("-n", "--limit", default=10, help="Maximum results")
+@click.option("-n", "--limit", default=10, help="Maximum results (0 = all)")
 @click.pass_context
 def search(ctx, query, item_type, limit):
     """Full-text search across the database.
@@ -553,7 +635,7 @@ def search(ctx, query, item_type, limit):
         "custom_localizations": ["name", "scope", "entries"],
     }
 
-    _display_results_table(results, item_type.title(), columns[item_type], db_path=db_path)
+    _display_results_table(results, item_type.title(), columns[item_type], db_path=db_path, limit=limit)
 
 
 @main.command()
@@ -699,6 +781,67 @@ def update(ctx, docs_dir, data_types_dir, version):
         console.print(f"[red]Update failed: {e}[/red]")
         import traceback
         traceback.print_exc()
+
+
+@main.command()
+@click.argument("query")
+@click.option("--asm", "asm", type=int, default=0, metavar="N",
+              help="Print N instructions of disassembly after each read site (12 before it).")
+@click.option("--rebuild", is_flag=True, help="Rebuild the eu5.exe define index.")
+def define(query, asm, rebuild):
+    """Show a define: vanilla value, mod overrides, and the engine functions that read it.
+
+    QUERY is a define name. A partial name lists the matching defines. Defines
+    read by the same engine function usually belong to one formula, so each
+    reader lists the other defines it reads. Needs numpy, capstone and pefile
+    (pipx inject pdx-syntax numpy capstone pefile).
+    """
+    from . import defines as D
+
+    def out(text):
+        console.print(text, soft_wrap=True, highlight=False)
+
+    vanilla = D.parse_defines(D.DEFINES_FILE)
+    name = query.upper()
+    if name not in vanilla:
+        hits = sorted(n for n in vanilla if name in n)
+        if not hits:
+            out(f"[yellow]No define matches '{_esc(query)}'[/yellow]")
+            return
+        for n in hits:
+            v = vanilla[n]
+            out(f"{v['ns']}.{n} = {_esc(v['value'])}" + (f"  # {_esc(v['comment'])}" if v["comment"] else ""))
+        return
+
+    v = vanilla[name]
+    out(f"[bold]{v['ns']}.{name}[/bold] = {_esc(v['value'])}   (00_defines.txt:{v['line']})")
+    if v["comment"]:
+        out(f"  # {_esc(v['comment'])}")
+    for path, line, text in D.mod_overrides(name, Path.cwd()):
+        out(f"  mod: {_esc(text)}   ({_esc(path)}:{line})")
+
+    try:
+        idx = D.load_index(rebuild=rebuild)
+    except ImportError as e:
+        out(f"[yellow]Engine readers need numpy, capstone and pefile: {e}[/yellow]")
+        return
+    if name not in idx["slots"]:
+        out("  engine: no registration found in eu5.exe")
+        return
+    funcs = D.co_readers(idx, name)
+    out(f"  value slot: {idx['slots'][name]:#x}")
+    if not funcs:
+        out("  engine readers: none found (the value may be copied elsewhere, or the define is unused)")
+        return
+    out(f"  engine readers ({len(funcs)}):")
+    for start, f in sorted(funcs.items()):
+        others = ", ".join(sorted(f["others"])) or "-"
+        out(f"    {start:#x} ({f['end'] - start} bytes), {len(f['sites'])} read(s); also reads: {_esc(others)}")
+        if asm:
+            for site in f["sites"]:
+                for ln in D.disasm_around(site, 12, asm, idx):
+                    out(f"      {_esc(ln)}")
+                out("")
 
 
 @main.command()
@@ -858,13 +1001,27 @@ _TITLE_TO_NOTE_TYPE = {
 
 
 def _display_results_table(results: list[dict], title: str, columns: list[str],
-                           db_path=None) -> None:
+                           db_path=None, limit=None) -> None:
     """Display search results.
 
     Plain mode (default when piped): one flat block per result, full text,
     nothing squeezed or wrapped away. Table mode (terminals): rich table with
     fold overflow so cells wrap but are never truncated.
+
+    limit caps the rows shown (0 or None shows all). When it cuts rows, a
+    footer says how many matched, so a short list never reads as complete.
     """
+    total = len(results)
+    if limit and total > limit:
+        results = results[:limit]
+    try:
+        _render_results(results, title, columns, db_path)
+    finally:
+        if len(results) < total:
+            print(f"Showing {len(results)} of {total} matches. -n 0 prints all of them.")
+
+
+def _render_results(results: list[dict], title: str, columns: list[str], db_path=None) -> None:
     note_type = _TITLE_TO_NOTE_TYPE.get(title.lower())
 
     use_plain = _PLAIN
@@ -989,6 +1146,17 @@ def _display_trigger_detail(trigger: dict, db_path=None) -> None:
 
     if db_path:
         _show_notes_section("trigger", trigger["name"], db_path)
+
+
+def _display_scope_rows(rows: list[dict], db_path=None) -> None:
+    """Show every link with one name. A "Saved from code" row adds nothing
+    when a documented row exists."""
+    documented = [r for r in rows if r.get("description") != "Saved from code"]
+    rows = documented or rows
+    for i, row in enumerate(rows):
+        if i:
+            console.print()
+        _display_scope_detail(row, db_path if i == len(rows) - 1 else None)
 
 
 def _display_scope_detail(scope: dict, db_path=None) -> None:

@@ -10,6 +10,36 @@ from rapidfuzz import fuzz, process
 from .database import get_connection, DEFAULT_DB_PATH
 
 
+def rank(results, query):
+    """Sort in place: exact name first, then names that start with the query,
+    then fuzzy score. For a dotted name (Country.GetName) the member part
+    counts too. An empty query sorts by name."""
+    q = (query or "").lower()
+    if not q:
+        results.sort(key=lambda r: str(r.get("name") or ""))
+        return
+
+    def key(r):
+        name = str(r.get("name") or "").lower()
+        member = name.rsplit(".", 1)[-1]
+        return (name == q, member == q,
+                name.startswith(q) or member.startswith(q),
+                r.get("_score", 0))
+    results.sort(key=key, reverse=True)
+
+
+def dedupe(results, limit=None, key=lambda r: r["name"]):
+    """Keep the first (best-scored) row per key. A limit of 0 or None keeps all."""
+    seen = set()
+    out = []
+    for r in results:
+        k = key(r)
+        if k not in seen:
+            seen.add(k)
+            out.append(r)
+    return out[:limit] if limit else out
+
+
 def fuzzy_search(
     query: str,
     table: str,
@@ -59,16 +89,9 @@ def fuzzy_search(
     conn.close()
 
     # Sort by score descending and limit
-    results.sort(key=lambda x: x["_score"], reverse=True)
+    rank(results, query)
 
-    # Deduplicate by name, keeping highest score
-    seen = set()
-    deduped = []
-    for r in results:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            deduped.append(r)
-    return deduped[:limit]
+    return dedupe(results, limit)
 
 
 MAIN_TABLES = [
@@ -165,16 +188,9 @@ def search_effects(
             row_dict["_score"] = score
             results.append(row_dict)
 
-    results.sort(key=lambda x: x["_score"], reverse=True)
+    rank(results, query)
 
-    # Deduplicate by name, keeping highest score
-    seen = set()
-    deduped = []
-    for r in results:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            deduped.append(r)
-    return deduped[:limit]
+    return dedupe(results, limit)
 
 
 def search_triggers(
@@ -213,16 +229,9 @@ def search_triggers(
             row_dict["_score"] = score
             results.append(row_dict)
 
-    results.sort(key=lambda x: x["_score"], reverse=True)
+    rank(results, query)
 
-    # Deduplicate by name, keeping highest score
-    seen = set()
-    deduped = []
-    for r in results:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            deduped.append(r)
-    return deduped[:limit]
+    return dedupe(results, limit)
 
 
 def search_scopes(
@@ -260,16 +269,16 @@ def search_scopes(
             row_dict["_score"] = score
             results.append(row_dict)
 
-    results.sort(key=lambda x: x["_score"], reverse=True)
+    rank(results, query)
 
-    # Deduplicate by name, keeping highest score
-    seen = set()
-    deduped = []
-    for r in results:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            deduped.append(r)
-    return deduped[:limit]
+    # One name can be several links: 'province' reads from a country (with
+    # data) and from a location. Keep each link. A "Saved from code" row adds
+    # nothing when a documented row of the same name exists.
+    documented = {r["name"] for r in results if r.get("description") != "Saved from code"}
+    results = [r for r in results
+               if r.get("description") != "Saved from code" or r["name"] not in documented]
+    return dedupe(results, limit,
+                  key=lambda r: (r["name"], r.get("scope_type") or "", r.get("target_type") or ""))
 
 
 def search_modifiers(
@@ -312,16 +321,9 @@ def search_modifiers(
             row_dict["_score"] = score
             results.append(row_dict)
 
-    results.sort(key=lambda x: x["_score"], reverse=True)
+    rank(results, query)
 
-    # Deduplicate by name, keeping highest score
-    seen = set()
-    deduped = []
-    for r in results:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            deduped.append(r)
-    return deduped[:limit]
+    return dedupe(results, limit)
 
 
 def search_on_actions(
@@ -355,16 +357,9 @@ def search_on_actions(
             row_dict["_score"] = score
             results.append(row_dict)
 
-    results.sort(key=lambda x: x["_score"], reverse=True)
+    rank(results, query)
 
-    # Deduplicate by name, keeping highest score
-    seen = set()
-    deduped = []
-    for r in results:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            deduped.append(r)
-    return deduped[:limit]
+    return dedupe(results, limit)
 
 
 def fts_search(
@@ -402,7 +397,8 @@ def fts_search(
     """
 
     try:
-        cursor.execute(sql, (query, limit))
+        # SQLite reads a negative LIMIT as no limit.
+        cursor.execute(sql, (query, limit if limit else -1))
         rows = cursor.fetchall()
         results = [dict(row) for row in rows]
     except sqlite3.OperationalError:
@@ -465,6 +461,20 @@ def get_by_name(
     conn.close()
 
     return dict(row) if row else None
+
+
+def get_all_by_name(
+    name: str,
+    item_type: str,
+    db_path: Optional[Path] = None,
+) -> list[dict]:
+    """Get every row with this exact name (a scope link can have several)."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT * FROM {item_type} WHERE name = ? ORDER BY id", (name,))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
 
 
 def search_data_types(
@@ -541,15 +551,12 @@ def search_data_types(
         row_dict["_score"] = score
         results.append(row_dict)
 
-    results.sort(key=lambda x: (x["_score"], x.get("name", "")), reverse=True)
+    rank(results, query)
 
-    seen = set()
-    deduped = []
-    for r in results:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            deduped.append(r)
-    return deduped[:limit]
+    # The same name can be listed in several categories (gui and script, for
+    # example); each is a separate fact about where it can be used.
+    return dedupe(results, limit,
+                  key=lambda r: (r["name"], r.get("parent_type"), r.get("source_category")))
 
 
 def search_custom_localizations(
@@ -593,15 +600,9 @@ def search_custom_localizations(
             row_dict["_score"] = score
             results.append(row_dict)
 
-    results.sort(key=lambda x: x["_score"], reverse=True)
+    rank(results, query)
 
-    seen = set()
-    deduped = []
-    for r in results:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            deduped.append(r)
-    return deduped[:limit]
+    return dedupe(results, limit)
 
 
 def add_note(

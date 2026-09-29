@@ -86,6 +86,7 @@ Or pass `--docs-dir` / `--data-types-dir` to `update` directly.
 | `gui <query>` | Search GUI functions/promotes/types (for .gui files) |
 | `custom-loc <query>` | Search custom localization functions |
 | `search <query>` | Full-text search |
+| `define <name>` | A define's vanilla value, mod overrides (from the current mod), and the eu5.exe functions that read it, each with the other defines it reads. A partial name lists matches. `--asm N` prints disassembly around each read. Needs the `exe` extra |
 | `note add\|list\|rm` | Attach findings to entries (persist across updates) |
 | `categories` | List filter values |
 | `scopes [name]` | List scope types, or show one scope's capabilities |
@@ -93,16 +94,34 @@ Or pass `--docs-dir` / `--data-types-dir` to `update` directly.
 | `update` | Rebuild DB from game dumps |
 | `init` | Initialize an empty database |
 
+## Engine Define Index
+
+`define` reads `eu5.exe` directly. The engine registers each define with its
+name string and a pointer to its value slot; the index follows every read of
+that slot and maps it to its function through the unwind table. Defines that
+one function reads together usually belong to one formula, so the reader list
+shows which defines interact. A game patch changes the exe size or mtime, and
+the next call rebuilds the index (about 10 seconds) into `~/.cache/pdx-syntax/`.
+Set `PDX_GAME_ROOT` if the game is not in the default Steam folder.
+
+Install the extra: `pipx inject pdx-syntax numpy capstone pefile`.
+
 ## Search Options
 
 All search commands support:
 
-- `-n, --limit N` - Maximum results (default: 10)
+- `-n, --limit N` - Maximum results (default: 10, `0` for all). When the limit cuts rows, a footer gives the full match count
 - `--exact` - Exact name match with full detail view
 
-Effect/Trigger: `-s/--scope`, `-c/--category`. Scope: `-t/--type`, `--iterator`. Modifier: `-c/--category`, `-s/--scope`, `--boolean`. Promote: `-t/--type`, `-c/--category`, `-d/--definition`, `-r/--returns`. GUI: `-t/--type` (owner), `-r/--returns`, `-d/--definition`, `--internal`. Custom-loc: `-s/--scope`, `-e/--entries`.
+Results rank an exact name first, then names that start with the query, then
+fuzzy matches. A scope link name can have several rows: `province` reads from
+a country (with data) and from a location, and both rows show.
 
-`promote` and `gui` match name, usage (description), and return type. An empty query plus a filter lists everything matching it, e.g. `gui "" --returns CString` or `promote "" --returns Country -t Country`.
+Effect/Trigger: `-s/--scope`, `-c/--category`. Scope: `-t/--type`, `--iterator`. Modifier: `-c/--category`, `-s/--scope`, `--boolean`. Promote: `-t/--type`, `-c/--category`, `-d/--definition`, `-r/--returns`. GUI: `-t/--type` (owner), `-r/--returns`, `-d/--definition`, `--internal`, `--all`. Custom-loc: `-s/--scope`, `-e/--entries`.
+
+`promote` and `gui` match name, usage (description), and return type. An empty query plus a filter lists everything matching it, e.g. `gui "" --returns CString` or `promote "" --returns Country -t Country`. A query that ends in `.` lists every member of one type: `gui "LocationToBuildItem."`.
+
+`gui` searches the `gui`, `common` and `uncategorized` categories. `common` holds functions that GUI, script and loc share (`Not`, `SelectLocalization`); `uncategorized` holds most of the game's own types. `--internal` adds engine internals and `--all` adds `script` (`ROOT`, `Scope.*`). When a category that the search left out also matches, `gui` says so and names a few of the matches.
 
 ## Database Location
 

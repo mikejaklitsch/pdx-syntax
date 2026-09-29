@@ -169,3 +169,41 @@ def test_data_type_gui_only_excludes_internal(dt_db):
     names = {r["name"] for r in results}
     assert "PdxGuiWidget.SetVisible" not in names
     assert "GetServerInfo" in names
+
+
+@pytest.fixture
+def links_db(tmp_path):
+    """Scope links that share a name, plus data types in several categories."""
+    db_path = tmp_path / "links.db"
+    init_database(db_path)
+    conn = get_connection(db_path)
+    cur = conn.cursor()
+    cur.executemany(
+        "INSERT INTO scopes (name, scope_type, target_type, description) VALUES (?, ?, ?, ?)",
+        [("province_definition", "location", "province_definition", "Unknown"),
+         ("province", "country", "province", "Unknown"),
+         ("province", "location", "province", "Unknown"),
+         ("province", "", "", "Saved from code")])
+    cur.executemany(
+        "INSERT INTO data_types (name, parent_type, definition_type, source_category) "
+        "VALUES (?, ?, ?, ?)",
+        [("NotEqualTo_int32", None, "Global function", "common"),
+         ("Not", None, "Global function", "common"),
+         ("Thing.Not", "Thing", "Function", "gui"),
+         ("Thing.Not", "Thing", "Function", "gui")])
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_scope_keeps_every_link_with_one_name(links_db):
+    from pdx_syntax.search import search_scopes
+    rows = search_scopes("province", db_path=links_db)
+    assert [(r["name"], r["scope_type"]) for r in rows[:2]] == [
+        ("province", "country"), ("province", "location")]
+    assert not any(r["description"] == "Saved from code" for r in rows)
+
+
+def test_exact_name_ranks_first_and_limit_zero_keeps_all(links_db):
+    rows = search_data_types("Not", limit=0, db_path=links_db)
+    assert [r["name"] for r in rows] == ["Not", "Thing.Not", "NotEqualTo_int32"]
